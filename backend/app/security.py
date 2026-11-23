@@ -17,11 +17,20 @@ class Role(StrEnum):
 class Permission(StrEnum):
     READ_CAPABILITIES = "capabilities:read"
     READ_AUDIT = "audit:read"
+    READ_NETWORK = "network:read"
+    CHANGE_NETWORK = "network:change"
 
 
 ROLE_PERMISSIONS = {
-    Role.VIEWER: frozenset({Permission.READ_CAPABILITIES}),
-    Role.ADMIN: frozenset({Permission.READ_CAPABILITIES, Permission.READ_AUDIT}),
+    Role.VIEWER: frozenset({Permission.READ_CAPABILITIES, Permission.READ_NETWORK}),
+    Role.ADMIN: frozenset(
+        {
+            Permission.READ_CAPABILITIES,
+            Permission.READ_AUDIT,
+            Permission.READ_NETWORK,
+            Permission.CHANGE_NETWORK,
+        }
+    ),
 }
 bearer = HTTPBearer(auto_error=False, scheme_name="LocalBearer")
 Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]

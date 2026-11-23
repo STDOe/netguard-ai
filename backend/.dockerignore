@@ -5,6 +5,11 @@
 !alembic.ini
 !app/
 !app/*.py
+!app/network/
+!app/network/*.py
+!config/
+!config/profiles/
+!config/profiles/*.yaml
 !migrations/
 !migrations/*.py
 !migrations/*.mako

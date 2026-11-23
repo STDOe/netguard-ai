@@ -35,7 +35,8 @@ jobs:
           docker run --rm -v "$PWD:/repo:ro" -w /repo \
             ghcr.io/gitleaks/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055 \
             git --redact
-      - name: Compose startup and readiness
+      - name: Compose startup, readiness and seeded topology
+        shell: bash
         run: |
           NETGUARD_VIEWER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
           NETGUARD_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -44,3 +45,7 @@ jobs:
           docker compose up --build --wait --wait-timeout 60
           curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/health/live
           curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/health/ready
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${NETGUARD_VIEWER_TOKEN}" \
+            http://127.0.0.1:8000/api/v1/networks |
+            python -c 'import json,sys; assert json.load(sys.stdin)[0]["name"] == "retail-payment-hub-spoke"'
