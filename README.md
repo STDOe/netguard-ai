@@ -1,6 +1,6 @@
 # NetGuard AI
 
-NetGuard AI is a network design and security application with a standalone backend and a future AI Workforce OS integration. The current stage is **Foundation (v0.1)**. The backend reports `demo_mode: true` and has no network device or LLM connectivity.
+NetGuard AI is a network design and security application with a standalone backend and a future AI Workforce OS integration. The current stage is **Network Core (v0.1)** with a persistent mock network. The backend reports `demo_mode: true` and has no network device or LLM connectivity.
 
 ## Local development
 
@@ -47,7 +47,7 @@ The CA is used during dependency installation and stays out of the image.
 | `GET /api/v1/health/live` | Public. Reports process liveness. |
 | `GET /api/v1/health/ready` | Public. Reports readiness after both SQLite tables and the expected migration revision are available. |
 | `GET /api/v1/capabilities` | Viewer or admin. Reports the API version, stage and demo mode. |
-| `GET /api/v1/audit/events?limit=25` | Admin. Returns recent authentication and permission denials, with a limit of 1–100. |
+| `GET /api/v1/audit/events?limit=25` | Admin. Returns recent access denials. Add `include_network=true` to include network audit events. Limits are 1–100. |
 | `GET /api/v1/openapi.json` | Viewer or admin. Returns the OpenAPI contract. |
 
 ```bash
@@ -58,7 +58,57 @@ curl -fsS -H "Authorization: Bearer ${NETGUARD_VIEWER_TOKEN}" \
 
 The server assigns an `X-Request-ID` to every response and logs request completion as JSON. Errors share the shape `{"error":{"code":"…","message":"…","request_id":"…"}}`. An absent or invalid credential yields 401. An authenticated role without permission yields 403. An unavailable database or pending migration yields 503 from readiness.
 
-## Foundation acceptance
+## Network Core demo
+
+At startup, the backend seeds `retail-payment-hub-spoke` from the
+[bundled YAML profile](backend/config/profiles/retail-payment-hub-spoke.yaml) if the migrated
+database has no network with its UUID. The profile defines the devices, zones, VLANs, subnets,
+and versioned policy. Its `10.30.0.0/16` block is an allocation container with distinct DMZ and
+Honeypot child subnets. The Cash and Infra segments use their own allocations.
+
+Set `NETGUARD_PROFILE_PATH` before starting local Uvicorn to load another YAML file. For Compose,
+mount the replacement read-only at `/srv/netguard/config/profiles/retail-payment-hub-spoke.yaml`
+in a local override. Restart to load changes and bump the policy version when editing policy.
+Use a new network UUID for a different topology. The service preserves existing networks and
+snapshots. A missing policy or a mismatch between the stored topology and the active profile
+blocks changes while preserving read access. If you migrate a database while the app is running,
+restart the app to run profile initialization.
+
+The following routes start with `/api/v1/networks`. Viewer and Admin can read. Only Admin can
+change or restore.
+
+| Method and suffix | Behavior |
+|---|---|
+| `GET /api/v1/networks` | Lists network IDs, names and current revisions. |
+| `GET /{network_id}/topology` | Returns the current network and snapshot checksum. |
+| `GET /{network_id}/devices/{device_id}` | Returns device facts, interfaces, routes and capabilities. |
+| `GET /{network_id}/policy` | Evaluates the current revision, reporting rule IDs, decisions, severity, reasons, evidence and policy version. |
+| `GET /{network_id}/revisions` | Lists revision metadata newest first. Supports `limit` (1–100) and `before_revision`. |
+| `GET /{network_id}/snapshots/{revision}` | Returns a verified full snapshot. |
+| `POST /{network_id}/changes` | Requires the current `expected_revision` and a typed `change` with kind `put_static_route`, `put_firewall_rule` or `set_routing_protocols`. |
+| `POST /{network_id}/restore` | Requires the current `expected_revision` and a stored `snapshot_revision`. Checks the active policy and creates a new revision. |
+
+Fetch the UUID and revision before proposing a change:
+
+```bash
+curl -fsS -H "Authorization: Bearer ${NETGUARD_VIEWER_TOKEN}" \
+  http://127.0.0.1:8000/api/v1/networks
+```
+
+Each successful change creates a snapshot and audit event in the same SQLite transaction.
+Stale revisions and corrupt snapshots return HTTP 409. Policy denials and unknown decisions
+return HTTP 403 with typed `findings`; malformed requests and invalid topology changes return
+HTTP 422. See the authenticated OpenAPI schema for payloads.
+
+The policy defaults to deny. It checks directions, CIDR containment, protocol permissions and
+device capabilities. The bundled allowlist permits only Cash-to-Infra DNS to its configured
+address and port. An allowed firewall intent must use a shared, known firewall gateway.
+Static routes require a modeled, directly connected next hop and a destination attached to that
+peer. The model covers these simulated paths and assumes no NAT. Multi-hop reachability,
+dynamic routing and real device dataplanes are outside the model. Findings with insufficient
+information are `unknown` and block writes.
+
+## Verification
 
 Run from `backend/` after `uv sync --locked`:
 
@@ -69,6 +119,9 @@ uv run --locked mypy
 uv run --locked pytest
 ```
 
-The test suite covers role checks, health before and after migration, response contracts, migrations, and SQLite persistence. Foundation acceptance also requires local and Compose startup with HTTP readiness, a clean Git history secret scan, and the Foundation workflow on a pull request. The workflow runs lint, type checks, tests, Gitleaks and a Compose startup check.
+The test suite covers the Foundation contracts, migration from the Foundation schema, policy
+isolation, authorization, concurrent edits, atomic rollback, and corrupt snapshot rejection.
+The pull request workflow runs lint, type checks, tests, Gitleaks, and a Compose smoke test
+that checks readiness and the seeded demo network.
 
 See [Foundation ADRs](docs/architecture/) and the [master specification](docs/NetGuard_AI_TZ_v2.0.md).

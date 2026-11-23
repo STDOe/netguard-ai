@@ -1,8 +1,9 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from sqlite3 import Connection
+from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, Engine, String, create_engine, select, text
+from sqlalchemy import BigInteger, Engine, String, create_engine, event, select, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -29,6 +30,10 @@ class AuditEvent(Base):
     actor: Mapped[str | None] = mapped_column(String(64))
     request_id: Mapped[str] = mapped_column(String(36))
     outcome: Mapped[int]
+    event_type: Mapped[str | None] = mapped_column(String(48))
+    network_id: Mapped[str | None] = mapped_column(String(36))
+    revision: Mapped[int | None]
+    policy_version: Mapped[str | None] = mapped_column(String(80))
 
     @property
     def occurred_at(self) -> datetime:
@@ -36,9 +41,43 @@ class AuditEvent(Base):
 
 
 def sqlite_engine(path: Path) -> Engine:
-    return create_engine(
+    engine = create_engine(
         URL.create("sqlite", database=str(path.resolve())),
         connect_args={"autocommit": False, "timeout": 2},
+    )
+
+    @event.listens_for(engine, "connect")
+    def enable_foreign_keys(connection: Connection, _: object) -> None:
+        connection.autocommit = True
+        try:
+            connection.execute("PRAGMA foreign_keys=ON")
+        finally:
+            connection.autocommit = False
+
+    return engine
+
+
+def audit_event(
+    request_id: str,
+    actor: str | None,
+    outcome: int,
+    *,
+    event_type: str | None = None,
+    network_id: UUID | None = None,
+    revision: int | None = None,
+    policy_version: str | None = None,
+) -> AuditEvent:
+    elapsed = datetime.now(UTC) - EPOCH
+    return AuditEvent(
+        id=str(uuid4()),
+        occurred_at_us=elapsed // timedelta(microseconds=1),
+        actor=actor,
+        request_id=request_id,
+        outcome=outcome,
+        event_type=event_type,
+        network_id=None if network_id is None else str(network_id),
+        revision=revision,
+        policy_version=policy_version,
     )
 
 
@@ -58,23 +97,26 @@ class Storage:
             return True
 
     def record_denial(self, request_id: str, actor: str | None, outcome: int) -> None:
-        elapsed = datetime.now(UTC) - EPOCH
+        self.record_event(audit_event(request_id, actor, outcome))
+
+    def record_event(self, entry: AuditEvent) -> None:
         with Session(self.engine) as session, session.begin():
-            session.add(
-                AuditEvent(
-                    id=str(uuid4()),
-                    occurred_at_us=elapsed // timedelta(microseconds=1),
-                    actor=actor,
-                    request_id=request_id,
-                    outcome=outcome,
-                )
-            )
+            session.add(entry)
 
     def recent_denials(self, limit: int) -> list[AuditEvent]:
+        return self.recent_events(limit, denials_only=True)
+
+    def recent_events(
+        self, limit: int, *, denials_only: bool = False
+    ) -> list[AuditEvent]:
         with Session(self.engine) as session:
-            statement = (
-                select(AuditEvent)
-                .order_by(AuditEvent.occurred_at_us.desc(), AuditEvent.id.desc())
-                .limit(limit)
+            statement = select(AuditEvent)
+            if denials_only:
+                statement = statement.where(AuditEvent.event_type.is_(None))
+            return list(
+                session.scalars(
+                    statement.order_by(
+                        AuditEvent.occurred_at_us.desc(), AuditEvent.id.desc()
+                    ).limit(limit)
+                )
             )
-            return list(session.scalars(statement))

@@ -32,6 +32,10 @@ class AuditEntry(BaseModel):
     actor: str | None
     request_id: str
     outcome: int
+    event_type: str | None = None
+    network_id: str | None = None
+    revision: int | None = None
+    policy_version: str | None = None
 
 
 class AuditResponse(BaseModel):

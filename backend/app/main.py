@@ -16,8 +16,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import contracts
 from app.config import Settings
+from app.network.api import NetworkErrorResponse, failure, network_router
+from app.network.driver import MockNetworkDriver
+from app.network.errors import NetworkError, PolicyBlocked
+from app.network.policy import load_profile
+from app.network.repository import NetworkRepository
 from app.security import Permission, authorizer
-from app.storage import Storage, sqlite_engine
+from app.storage import Storage, audit_event, sqlite_engine
 
 logger = logging.getLogger("netguard.request")
 if not logger.handlers:
@@ -51,12 +56,24 @@ def error_response(
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings if settings is not None else Settings.model_validate({})
     storage = Storage(sqlite_engine(settings.database_path))
+    networks = NetworkRepository(storage.engine)
+    driver = MockNetworkDriver(networks, load_profile(settings.profile_path))
     versions = ScriptDirectory(str(Path(__file__).resolve().parents[1] / "migrations"))
     expected_heads = set(versions.get_heads())
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
+            try:
+                if settings.database_path.is_file() and storage.check_ready(
+                    expected_heads
+                ):
+                    networks.check_ready()
+                    driver.initialize()
+            except (SQLAlchemyError, PolicyBlocked):
+                logger.warning(
+                    json.dumps({"event": "network_initialization_unavailable"})
+                )
             yield
         finally:
             await run_in_threadpool(storage.engine.dispose)
@@ -81,8 +98,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             response = error_response(request, 500)
 
-        audit_write_failed = False
-        if response.status_code in (401, 403):
+        audit_write_failed = getattr(request.state, "audit_write_failed", False)
+        if response.status_code in (401, 403) and not getattr(
+            request.state, "network_attempt", None
+        ):
             try:
                 await run_in_threadpool(
                     storage.record_denial,
@@ -120,6 +139,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> JSONResponse:
         return error_response(request, 422)
 
+    @app.exception_handler(NetworkError)
+    async def handle_network_error(
+        request: Request, error: NetworkError
+    ) -> JSONResponse:
+        status, message, findings = failure(error)
+        request_id = request.state.request_id
+        attempt = getattr(request.state, "network_attempt", None)
+        if attempt is not None:
+            event_type, network_id, revision = attempt
+            try:
+                await run_in_threadpool(
+                    storage.record_event,
+                    audit_event(
+                        request_id,
+                        request.state.actor,
+                        status,
+                        event_type=event_type,
+                        network_id=network_id,
+                        revision=revision,
+                        policy_version=None
+                        if not findings
+                        else findings[0].policy_version,
+                    ),
+                )
+            except SQLAlchemyError:
+                request.state.audit_write_failed = True
+        body = NetworkErrorResponse(
+            error=contracts.ErrorDetail(
+                code=error.code, message=message, request_id=request_id
+            ),
+            findings=findings,
+        )
+        return JSONResponse(
+            body.model_dump(
+                mode="json", exclude={"findings"} if findings is None else None
+            ),
+            status_code=status,
+        )
+
+    @app.exception_handler(SQLAlchemyError)
+    async def handle_storage_error(
+        request: Request, _: SQLAlchemyError
+    ) -> JSONResponse:
+        if getattr(request.state, "network_attempt", None):
+            request.state.audit_write_failed = True
+        return error_response(request, 503)
+
     error_schema: dict[str, object] = {"model": contracts.ErrorResponse}
     api = APIRouter(prefix="/api/v1", responses={500: error_schema})
     read_capabilities = Depends(authorizer(settings, Permission.READ_CAPABILITIES))
@@ -137,6 +203,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def ready() -> contracts.Health:
         try:
             if settings.database_path.is_file() and storage.check_ready(expected_heads):
+                networks.check_ready()
                 return contracts.Health()
         except SQLAlchemyError as error:
             raise HTTPException(503) from error
@@ -155,9 +222,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def audit_events(
         limit: Annotated[int, Query(ge=1, le=100)] = 25,
+        include_network: bool = False,
     ) -> contracts.AuditResponse:
         try:
-            events = storage.recent_denials(limit)
+            events = storage.recent_events(limit, denials_only=not include_network)
         except SQLAlchemyError as error:
             raise HTTPException(503) from error
         return contracts.AuditResponse(
@@ -169,4 +237,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(app.openapi())
 
     app.include_router(api)
+    app.include_router(network_router(settings, driver))
     return app

@@ -17,6 +17,7 @@ RUN --mount=type=secret,id=netguard_ca \
 
 COPY --chmod=0644 alembic.ini ./
 COPY --chmod=u=rwX,go=rX app ./app
+COPY --chmod=u=rwX,go=rX config ./config
 COPY --chmod=u=rwX,go=rX migrations ./migrations
 
 USER 10001:10001

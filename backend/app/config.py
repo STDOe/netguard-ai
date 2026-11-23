@@ -5,6 +5,7 @@ from typing import Self
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_PROFILE = Path(__file__).resolve().parents[1] / "config" / "profiles"
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,128}")
 
 
@@ -15,6 +16,7 @@ class DatabaseSettings(BaseSettings):
 
 
 class Settings(DatabaseSettings):
+    profile_path: Path = DEFAULT_PROFILE / "retail-payment-hub-spoke.yaml"
     demo_mode: bool = True
     viewer_token: SecretStr
     admin_token: SecretStr

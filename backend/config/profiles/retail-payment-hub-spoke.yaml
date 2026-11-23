@@ -1,0 +1,163 @@
+# Demo address plan. The DMZ aggregate is an allocation container only.
+network:
+  id: 976f006b-5d51-557e-917b-98fd06de9d25
+  name: retail-payment-hub-spoke
+  traffic_model: connected-no-nat
+  zones:
+    - id: &zone_infra 58c61c15-9997-5454-9ccf-ac15234da286
+      name: Infra
+    - id: &zone_cash b408f323-9407-5e07-89ee-b8ae7f7b6cf0
+      name: Cash / Payment
+    - id: &zone_dmz f3e91d72-226a-5428-b915-f2ece50d8cba
+      name: DMZ / User
+    - id: &zone_honeypot 2b8929c6-05b8-5996-8e9f-6c6ef2ce1dcc
+      name: Honeypot
+    - id: &zone_external 4b71b701-c771-5af1-b9c5-fdcbefe759d5
+      name: External
+  vlans:
+    - id: &vlan_infra e8cf4c0d-e277-54db-8861-1a185b28afbc
+      name: Infra
+      tag: 10
+      zone_id: *zone_infra
+    - id: &vlan_cash 73eb6248-a3ab-5022-a160-64f05f9e1a57
+      name: Cash / Payment
+      tag: 20
+      zone_id: *zone_cash
+    - id: &vlan_dmz c8a3e29c-c2f0-5f75-b5b5-00061c991e00
+      name: DMZ / User
+      tag: 30
+      zone_id: *zone_dmz
+    - id: &vlan_honeypot 102bca7d-b70b-5971-8534-03b991d3dfe3
+      name: Honeypot
+      tag: 99
+      zone_id: *zone_honeypot
+  subnets:
+    - id: &dmz_allocation 4c2c0cbd-50f7-5c32-82b2-84eb657e3932
+      name: DMZ allocation
+      prefix: 10.30.0.0/16
+    - id: &subnet_infra de0f9cc8-8d19-5e15-ad1c-a1de4788dd41
+      name: Infra
+      prefix: 10.10.0.0/16
+      vlan_id: *vlan_infra
+      gateway: 10.10.0.1
+    - id: &subnet_cash ff335214-adf3-520d-ba60-1e5a54533a8b
+      name: Cash / Payment
+      prefix: 10.20.0.0/16
+      vlan_id: *vlan_cash
+      gateway: 10.20.0.1
+    - id: &subnet_dmz b141fc56-7d2c-5c27-ab94-54341a749c9f
+      name: DMZ / User
+      prefix: 10.30.0.0/24
+      vlan_id: *vlan_dmz
+      gateway: 10.30.0.1
+      parent_id: *dmz_allocation
+    - id: &subnet_honeypot 41869aee-b8e9-5459-b1d9-044ff8def669
+      name: Honeypot
+      prefix: 10.30.99.0/24
+      vlan_id: *vlan_honeypot
+      gateway: 10.30.99.1
+      parent_id: *dmz_allocation
+  devices:
+    - id: 86810fe7-06dc-5dfb-b95b-e5005fe27724
+      name: Core / Perimeter
+      platform: mock-router
+      version: "1"
+      capabilities:
+        routing_protocols: [static]
+        zone_firewall: true
+      interfaces:
+        - id: &port_core_infra 099f7d20-f6c5-59f9-91bc-8088d212870d
+          name: infra
+          subnet_id: *subnet_infra
+          address: 10.10.0.1
+        - id: &port_core_cash 8951828f-eac2-5f37-a8c0-be1d20bcc4f4
+          name: cash
+          subnet_id: *subnet_cash
+          address: 10.20.0.1
+        - id: &port_core_dmz ca287558-fa24-5d33-9ecd-6c09795c40a4
+          name: dmz
+          subnet_id: *subnet_dmz
+          address: 10.30.0.1
+        - id: &port_core_honeypot 46841286-c1ca-5da4-ba4b-3fc7f7df0f24
+          name: honeypot
+          subnet_id: *subnet_honeypot
+          address: 10.30.99.1
+    - id: 4f3884b3-28b5-5a09-8e8a-e716fa218af3
+      name: Infra spoke
+      platform: mock-router
+      version: "1"
+      capabilities:
+        routing_protocols: [static]
+        zone_firewall: false
+      interfaces:
+        - id: &port_infra_infra 6d6ec67a-3926-55c2-afbe-da5eed8e4321
+          name: infra
+          subnet_id: *subnet_infra
+          address: 10.10.0.2
+    - id: fbe0b529-da7b-5c52-ad9d-f1ac95c1a9bc
+      name: Cash / Payment spoke
+      platform: mock-router
+      version: "1"
+      capabilities:
+        routing_protocols: [static]
+        zone_firewall: false
+      interfaces:
+        - id: &port_cash_cash 31d3ed11-86c7-5a05-b5a3-d9f506d5c273
+          name: cash
+          subnet_id: *subnet_cash
+          address: 10.20.0.2
+    - id: 47e7e398-de61-5d5e-aea0-c9c101285ed2
+      name: DMZ / User spoke
+      platform: mock-router
+      version: "1"
+      capabilities:
+        routing_protocols: [static]
+        zone_firewall: false
+      interfaces:
+        - id: &port_dmz_dmz 436a5b44-767d-5b06-9fbc-090bbf3599a3
+          name: dmz
+          subnet_id: *subnet_dmz
+          address: 10.30.0.2
+    - id: c2bbb3af-7fb1-56b7-b286-c4ad1cc0b30e
+      name: Honeypot spoke
+      platform: mock-router
+      version: "1"
+      capabilities:
+        routing_protocols: [static]
+        zone_firewall: false
+      interfaces:
+        - id: &port_honeypot_honeypot 24e07c18-0039-5529-88ad-8ed4ecee9a8e
+          name: honeypot
+          subnet_id: *subnet_honeypot
+          address: 10.30.99.2
+  links:
+    - id: b6e00145-a53c-5c6d-af0a-ff88fb01affa
+      endpoints: [*port_core_infra, *port_infra_infra]
+    - id: 55021967-2d74-5c19-91da-307d1838b545
+      endpoints: [*port_core_cash, *port_cash_cash]
+    - id: d22dc5af-dfe8-56c5-b328-a5d2e4519f44
+      endpoints: [*port_core_dmz, *port_dmz_dmz]
+    - id: ae6e66d9-4f59-592a-a62f-5a5846967642
+      endpoints: [*port_core_honeypot, *port_honeypot_honeypot]
+
+policy:
+  version: retail-payment-hub-spoke/1
+  default_action: deny
+  allowed_protocols: [static]
+  platforms:
+    - name: mock-router
+      versions: ["1"]
+  blocked_pairs:
+    - source: *zone_dmz
+      destination: *zone_cash
+    - source: *zone_cash
+      destination: *zone_dmz
+    - source: *zone_honeypot
+      destination: *zone_external
+  allowed_flows:
+    - source_zone: *zone_cash
+      destination_zone: *zone_infra
+      source: 10.20.0.0/16
+      destination: 10.10.0.53/32
+      protocol: udp
+      destination_port: 53
