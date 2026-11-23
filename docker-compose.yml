@@ -1,0 +1,25 @@
+services:
+  netguard-app:
+    build: ./backend
+    environment:
+      NETGUARD_DEMO_MODE: ${NETGUARD_DEMO_MODE:-true}
+      NETGUARD_DATABASE_PATH: /var/lib/netguard/netguard.sqlite3
+      NETGUARD_VIEWER_TOKEN: ${NETGUARD_VIEWER_TOKEN:?Generate a local viewer token}
+      NETGUARD_ADMIN_TOKEN: ${NETGUARD_ADMIN_TOKEN:?Generate a local admin token}
+    ports:
+      - "127.0.0.1:${NETGUARD_PORT:-8000}:8000"
+    volumes:
+      - netguard-data:/var/lib/netguard
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3).close()"]
+      interval: 3s
+      timeout: 4s
+      retries: 10
+
+volumes:
+  netguard-data:

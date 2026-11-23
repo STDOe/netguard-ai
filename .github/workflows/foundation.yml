@@ -1,0 +1,46 @@
+name: Foundation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.9"
+      - name: Lint, types and tests
+        working-directory: backend
+        run: |
+          uv sync --locked
+          uv run --locked ruff check app migrations ../tests
+          uv run --locked ruff format --check app migrations ../tests
+          uv run --locked mypy
+          uv run --locked pytest
+      - name: Scan Git history for secrets
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" -w /repo \
+            ghcr.io/gitleaks/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055 \
+            git --redact
+      - name: Compose startup and readiness
+        run: |
+          NETGUARD_VIEWER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          NETGUARD_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          export NETGUARD_VIEWER_TOKEN NETGUARD_ADMIN_TOKEN
+          trap 'docker compose down --volumes' EXIT
+          docker compose up --build --wait --wait-timeout 60
+          curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/health/live
+          curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/health/ready
