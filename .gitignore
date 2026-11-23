@@ -221,3 +221,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# NetGuard local state
+.env.*
+!.env.example
+/backend/data/
