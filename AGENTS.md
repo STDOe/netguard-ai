@@ -31,3 +31,44 @@ Python 3.12+, FastAPI, Pydantic v2, LangGraph, LiteLLM, SQLite, pytest; UI: Jinj
 
 ## Формат отчёта Codex
 **Изменено:** файлы и назначение. **Проверено:** команды и фактический результат. **Не проверено:** ограничения среды. **Риски:** возможные регрессии/безопасность. **Следующий этап:** одна конкретная задача.
+
+## Git Workflow & Repository Persistence
+
+### Source of Truth
+- The GitHub repository is the source of truth for all project code, documentation, tests, and configuration templates.
+- Never assume that local or cloud workspace changes have been saved to GitHub.
+- Never commit secrets, credentials, `.env` files, private keys, or real network configuration containing sensitive data.
+
+### Branching
+- Keep `main` as the stable branch.
+- Create a separate feature or fix branch for each development task.
+- Do not push directly to `main` during normal development.
+- Do not use force-push on protected branches.
+
+### Development
+- Read `AGENTS.md` and relevant project documentation before modifying code.
+- Implement the requested task within its agreed scope.
+- Run relevant tests after every meaningful change.
+- Update documentation when the architecture or public API changes.
+- Preserve existing functionality unless the task explicitly requires changing it.
+
+### Persistence
+- Inspect `git status` and the final diff before completing the task.
+- Commit all intended project changes with a descriptive commit message.
+- Push the task branch to GitHub when repository permissions and environment capabilities allow it.
+- Create or update a Pull Request targeting `main` when supported.
+- Never claim that changes are saved remotely without verification.
+
+### Completion Report
+Every completed task must report:
+1. Implemented functionality.
+2. Changed files.
+3. Tests executed and their results.
+4. Branch name and commit hash.
+5. Remote push status.
+6. Pull Request URL, if created.
+7. Remaining issues or blockers.
+
+If pushing or creating a Pull Request is unavailable, clearly report the limitation and provide the exact commands or steps required to publish the changes.
+
+Never claim that a task is fully delivered to GitHub when its commits are only available locally.
