@@ -34,3 +34,7 @@ class PolicyBlocked(NetworkError):
             else "policy_unknown"
         )
         super().__init__(self.code)
+
+
+class ExecutionExpired(NetworkError):
+    code = "approval_expired"
