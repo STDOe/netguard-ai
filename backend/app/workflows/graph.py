@@ -198,7 +198,7 @@ class WorkflowNodes:
             **resumed,
             "requirements": updated,
             "status": "running",
-            "input_count": state.get("input_count", 0) + 1,
+            "input_count": state.get("input_count", 0) + int(updated != current),
         }
 
     def source(self, state: State) -> State:
@@ -233,7 +233,7 @@ class WorkflowNodes:
         body = BrownfieldRequest.model_validate(state["request"])
         snapshot = NetworkSnapshot.model_validate(state["snapshot"])
         intent = choose_intent(
-            self.provider, UUID(state["task_id"]), snapshot, body.goal
+            self.provider, self.driver, UUID(state["task_id"]), snapshot, body.goal
         )
         return {"intent": intent.model_dump(mode="json")}
 
@@ -291,7 +291,6 @@ class WorkflowNodes:
             approval is None
             or approval.decision != "approve"
             or approval.actor != state["actor"]
-            or Permission.APPROVE_WORKFLOW not in ROLE_PERMISSIONS[Role(approval.actor)]
             or plan.plan_id != approval.plan_id
             or plan.task_id != UUID(state["task_id"])
             or plan.exact_hash() != plan.plan_hash
@@ -311,6 +310,9 @@ class WorkflowNodes:
         if prior is not None:
             self.event(state, "execution.committed")
             return {"committed": prior.model_dump(mode="json")}
+        required = {Permission.APPROVE_WORKFLOW, Permission.CHANGE_NETWORK}
+        if not required.issubset(ROLE_PERMISSIONS[Role(approval.actor)]):
+            raise WorkflowError(403, "workflow_write_denied")
         if monotonic() >= RUN_DEADLINE.get():
             raise WorkflowError(409, "workflow_time_limit")
         if datetime.now(UTC) >= approval.expires_at:

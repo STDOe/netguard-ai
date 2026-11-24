@@ -1,6 +1,8 @@
 import csv
 import json
+import os
 import re
+import stat
 from datetime import date
 from io import StringIO
 from ipaddress import IPv4Network, IPv6Network
@@ -24,6 +26,7 @@ from app.workflows.models import Artifact, Positive, Requirements, Slug
 DESIGN_PROVENANCE = (
     "Validated operator requirements and deterministic address allocation"
 )
+HA_LIMIT = "HA not modeled. Standby units are budgeted. Design failover separately."
 Scope = Literal["hub", "site"]
 
 
@@ -92,7 +95,11 @@ class OfflineSources:
         if self.path is None:
             return ()
         try:
-            with self.path.open("rb") as handle:
+            with os.fdopen(
+                os.open(self.path, os.O_RDONLY | os.O_NONBLOCK), "rb"
+            ) as handle:
+                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                    return ()
                 raw = handle.read(65_537)
             if len(raw) > 65_536:
                 return ()
@@ -244,7 +251,15 @@ def architecture(task_id: UUID, req: Requirements) -> Inventory:
             "devices": [core, *sites],
         }
     )
-    return Inventory(task_id=task_id, network=network)
+    return Inventory(
+        task_id=task_id,
+        network=network,
+        provenance=(
+            f"{DESIGN_PROVENANCE}. {HA_LIMIT}"
+            if req.availability == "redundant"
+            else DESIGN_PROVENANCE
+        ),
+    )
 
 
 def device(
@@ -297,7 +312,8 @@ def hardware(
     )
     return BillOfMaterials(
         task_id=task_id,
-        provenance="Offline catalog if provided. Specifications unverified.",
+        provenance="Offline catalog if provided. Specifications unverified."
+        + (f" {HA_LIMIT}" if req.availability == "redundant" else ""),
         items=items,
     )
 
@@ -360,7 +376,7 @@ def export(
             f"{item.minimum_packets_per_second} | {item.status} |"
         )
     diagram = [
-        f"%% Schema 1 | Task {bom.task_id} | {DESIGN_PROVENANCE}",
+        f"%% Schema 1 | Task {bom.task_id} | {inventory.provenance}",
         "flowchart TD",
         "  hub[Hub]",
     ]
@@ -368,7 +384,7 @@ def export(
     for site in range(1, req.sites + 1):
         diagram.append(f"  hub --- site{site}[Site {site}]")
     ha = (
-        "Require two units and independent paths. Validate physical failover."
+        HA_LIMIT
         if req.availability == "redundant"
         else "Single hub requested. Assess its failure domain."
     )

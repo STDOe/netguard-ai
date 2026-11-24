@@ -48,6 +48,10 @@ class WorkflowRecord(Base):
     initial_request_id: Mapped[str] = mapped_column(String(36))
     payload: Mapped[str] = mapped_column(Text)
     pending: Mapped[str | None] = mapped_column(Text)
+    checkpoint_id: Mapped[str | None] = mapped_column(String(36))
+    checkpoint_digest: Mapped[str | None] = mapped_column(String(64))
+    verified_result: Mapped[str | None] = mapped_column(Text)
+    recovery_code: Mapped[str | None] = mapped_column(String(64))
 
 
 class WorkflowEvent(Base):
@@ -172,12 +176,76 @@ class WorkflowStore:
                     )
                 )
 
-    def synchronize(self, task_id: str, status: Status, consumed: UUID | None) -> None:
+    def status(self, task_id: str) -> str:
+        with Session(self.engine) as session:
+            return session.get_one(Task, task_id).status
+
+    def has_progress(self, task_id: str) -> bool:
+        with Session(self.engine) as session:
+            return (
+                session.scalar(
+                    select(WorkflowEvent.id)
+                    .where(
+                        WorkflowEvent.task_id == task_id,
+                        WorkflowEvent.step != "task.created",
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+
+    def legacy_signal_matches(self, task_id: str, consumed: str | None) -> bool:
+        # Before migration 0004 the audit trail was the only application-side
+        # acknowledgement of interview inputs, cancellation and decisions.
+        with Session(self.engine) as session:
+            last = session.scalar(
+                select(WorkflowEvent)
+                .where(
+                    WorkflowEvent.task_id == task_id,
+                    WorkflowEvent.step.in_(
+                        (
+                            "task.input",
+                            "task.cancel",
+                            "task.expire",
+                            "approval.approve",
+                            "approval.reject",
+                        )
+                    ),
+                )
+                .order_by(WorkflowEvent.sequence.desc())
+                .limit(1)
+            )
+            if last is None:
+                return consumed is None
+            return consumed is not None and last.id == str(
+                uuid5(UUID(consumed), last.step)
+            )
+
+    def mark_recovery(self, task_id: str) -> None:
+        with Session(self.engine) as session, session.begin():
+            session.get_one(Task, task_id).status = "recovery_required"
+            record = session.get_one(WorkflowRecord, task_id)
+            record.recovery_code = "checkpoint_inconsistent"
+
+    def synchronize(
+        self,
+        task_id: str,
+        status: Status,
+        consumed: UUID | None,
+        checkpoint_id: str,
+        digest: str,
+        result: str | None,
+        recovery_code: str | None,
+    ) -> None:
         with Session(self.engine) as session, session.begin():
             task = session.get_one(Task, task_id)
             task.status = status
+            row = session.get_one(WorkflowRecord, task_id)
+            row.checkpoint_id = checkpoint_id
+            row.checkpoint_digest = digest
+            row.verified_result = result
+            row.recovery_code = recovery_code
             if consumed is not None:
-                row = session.get_one(WorkflowRecord, task_id)
                 if (
                     row.pending is not None
                     and Signal.model_validate_json(row.pending).id == consumed

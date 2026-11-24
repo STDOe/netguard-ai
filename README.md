@@ -4,6 +4,8 @@ NetGuard AI is a network design and security application with a standalone backe
 
 ## Local development
 
+Native execution requires Linux or another POSIX system with local filesystem support for `fcntl.flock`. On Windows use Docker Desktop with Linux containers or WSL 2.
+
 Use Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/). The lockfile supplies reproducible Python dependencies.
 
 From the repository root, generate two distinct local credentials for the current shell:

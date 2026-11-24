@@ -26,7 +26,7 @@ error shape. A failed or blocked workflow can still be a successfully created ta
 ## States
 
 - `queued` and `running` are transient states.
-- `awaiting_input` pauses the interview. Up to five input submissions can fill missing
+- `awaiting_input` pauses the interview. Up to five changes to the interview answers can fill missing
   fields or resolve inconsistencies.
 - `awaiting_approval` pauses a Brownfield plan. A matching decision resumes it. Repeated
   identical decisions return the same result. A different decision conflicts.
@@ -38,8 +38,8 @@ error shape. A failed or blocked workflow can still be a successfully created ta
 
 Tasks run synchronously to an interrupt or terminal state. Approval expiration is evaluated
 on access. After an interrupted process, the next authorized request for a task reconciles its
-checkpoint and any decision that was already recorded. There is one writer per data directory.
-Contending clients can retry HTTP 409 with code `workflow_busy`. A cancellation is accepted
+checkpoint and any decision that was already recorded. Each task has a POSIX advisory lock. Different tasks can run concurrently.
+Contending clients can retry HTTP 409 with code `workflow_busy`. A previously recorded decision makes cancellation return a conflict without resuming execution. A cancellation is accepted
 at a waiting boundary. An apply already committed retains its revision and audit record.
 
 ## Greenfield
@@ -71,7 +71,7 @@ object for a two-site example.
 Use an explicit private IPv4 or IPv6 ULA pool. Device counts include registers, and zero
 registers declares that payment segregation is inapplicable. An empty vendor list explicitly
 leaves vendor choice open. Sizing allocates each site segment for its declared users and
-devices and assumes simultaneous site peaks at the hub. The output describes a logical
+devices and assumes simultaneous site peaks at the hub. For redundant designs all exports label standby units as budgeted and HA paths and failover as unmodeled. The output describes a logical
 design. Validate procurement, physical capacity, compatibility and failover separately.
 
 Exports include BOM in JSON, CSV and Markdown, a Mermaid topology, validated `inventory.yaml`,
@@ -114,9 +114,9 @@ Ollama uses `ollama/<model>` or `ollama_chat/<model>` and a trusted Ollama base 
 as `http://127.0.0.1:11434` for a locally installed server. Other providers must
 accept a manually configured LiteLLM model, endpoint and JSON text response.
 
-The provider receives only bounded typed candidates. Discovery names, inventory text,
+A single candidate is always selected locally. For an ambiguous set the provider receives only call-local integer IDs and operation kinds. NetGuard maps the selected ID back to the original candidate. Remote provider endpoints require HTTPS for every supported model. Discovery names, inventory text,
 credentials and policy documents stay out of prompts. A single request has an
-eight-second timeout, a 500-token output cap and zero retries. The runtime parses a JSON
-intent, requires exact membership of the allowed candidates, and runs deterministic
+eight-second timeout, a 32-token output cap and zero retries. A private subprocess caps the whole SDK call at 15 seconds. The runtime validates the JSON
+selection, maps it locally, and runs deterministic
 policy and diff validation. Unsupported responses, unavailable providers and rate
 limits get fixed error codes. There is no provider fallback.

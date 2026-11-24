@@ -1,15 +1,17 @@
 import json
-import os
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID, uuid5
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from app.config import Settings
 from app.network.driver import MockNetworkDriver, PutFirewallRule, PutStaticRoute
-from app.network.errors import NotFound, PolicyBlocked
+from app.network.errors import InvalidChange, NotFound, PolicyBlocked
 from app.network.models import NetworkSnapshot, StaticRoute
+from app.workflows.llm_worker import PlannerReply
 from app.workflows.models import (
     ChangeIntent,
     Diff,
@@ -36,6 +38,11 @@ class OfflinePlanner:
         return candidates[0]
 
 
+class Selection(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    option: int
+
+
 class LiteLLMPlanner:
     def __init__(self, settings: Settings) -> None:
         self.model = settings.llm_model
@@ -43,56 +50,43 @@ class LiteLLMPlanner:
         self.key = settings.llm_api_key
 
     def choose(self, candidates: tuple[ChangeIntent, ...]) -> ChangeIntent:
-        # Use the bundled pricing map, avoiding an external metadata lookup.
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        os.environ["LITELLM_LOG"] = "CRITICAL"
-        payload = json.dumps([intent.model_dump(mode="json") for intent in candidates])
-        if len(payload) > 4096:
-            raise WorkflowError(422, "llm_input_limit")
+        options = [
+            {"option": i, "kind": intent.kind} for i, intent in enumerate(candidates)
+        ]
+        request = {
+            "model": self.model,
+            "base": self.base,
+            "key": None if self.key is None else self.key.get_secret_value(),
+            "options": options,
+        }
+        # A stalled SDK call must release the task even if it ignores its HTTP timeout.
         try:
-            import litellm
-
-            litellm.telemetry = False
-            litellm.suppress_debug_info = True
-            response = litellm.completion(
-                model=self.model,
-                api_base=self.base,
-                api_key=None if self.key is None else self.key.get_secret_value(),
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "Return one supplied JSON object without Markdown. "
-                        "You have no tools and cannot revise a candidate.",
-                    },
-                    {
-                        "role": "user",
-                        "content": payload,
-                    },
-                ],
-                max_tokens=500,
-                timeout=8,
-                num_retries=0,
-                stream=False,
+            process = subprocess.run(
+                [sys.executable, "-m", "app.workflows.llm_worker"],
+                input=json.dumps(request),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=True,
             )
-            text = response.choices[0].message.content
-        except Exception as error:
-            # Keep fixed error codes. Provider exceptions may include credentials.
-            name = type(error).__name__
-            code = {
-                "Timeout": "llm_timeout",
-                "RateLimitError": "llm_rate_limit",
-            }.get(name, "llm_unavailable")
-            raise WorkflowError(502, code) from None
-        return parse_intent(text)
-
-
-def parse_intent(text: object) -> ChangeIntent:
-    if not isinstance(text, str) or len(text) > 8192:
-        raise WorkflowError(422, "invalid_llm_output")
-    try:
-        return INTENT.validate_json(text)
-    except ValidationError:
-        raise WorkflowError(422, "invalid_llm_output") from None
+            reply = PlannerReply.model_validate_json(process.stdout)
+        except subprocess.TimeoutExpired:
+            raise WorkflowError(502, "llm_timeout") from None
+        except (OSError, subprocess.CalledProcessError, ValidationError):
+            raise WorkflowError(502, "llm_unavailable") from None
+        if reply.error:
+            raise WorkflowError(502, reply.error)
+        text = reply.text
+        if not isinstance(text, str) or len(text) > 128:
+            raise WorkflowError(422, "invalid_llm_output")
+        try:
+            index = Selection.model_validate_json(text).option
+        except ValidationError:
+            raise WorkflowError(422, "invalid_llm_output") from None
+        if not 0 <= index < len(candidates):
+            raise WorkflowError(422, "llm_scope_mismatch")
+        return candidates[index]
 
 
 def candidates_for(
@@ -145,9 +139,28 @@ def candidates_for(
 
 
 def choose_intent(
-    provider: PlannerProvider, task_id: UUID, snapshot: NetworkSnapshot, goal: Goal
+    provider: PlannerProvider,
+    driver: MockNetworkDriver,
+    task_id: UUID,
+    snapshot: NetworkSnapshot,
+    goal: Goal,
 ) -> ChangeIntent:
     candidates = candidates_for(task_id, snapshot, goal)
+    if len(candidates) > 1:
+        allowed = []
+        rejected: list[InvalidChange | PolicyBlocked] = []
+        for candidate in candidates:
+            try:
+                render(driver, snapshot, candidate)
+            except (PolicyBlocked, InvalidChange) as error:
+                rejected.append(error)
+            else:
+                allowed.append(candidate)
+        if not allowed:
+            raise rejected[0]
+        candidates = tuple(allowed)
+    if len(candidates) == 1:
+        return candidates[0]
     chosen = provider.choose(candidates)
     if chosen not in candidates:
         raise WorkflowError(422, "llm_scope_mismatch")

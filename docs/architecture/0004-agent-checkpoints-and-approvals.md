@@ -15,8 +15,9 @@ advisory locking support.
 Each invocation checkpoints synchronously. The runtime records an input, cancellation or
 approval signal before delivering it to the graph. It clears the signal only after a
 checkpoint acknowledges its ID, then projects the current graph status to `tasks`.
-Deterministic audit IDs deduplicate repeated steps on recovery. The per-database advisory
-lock serializes graph invocations across processes with a bounded acquisition time.
+Deterministic audit IDs deduplicate repeated steps on recovery. One short database-wide advisory lock protects task creation. Per-task POSIX locks serialize graph invocations across processes. Blocking provider work has a separate wall-clock deadline. Offline catalog files are opened nonblocking and checked for regular-file type before reading.
+
+Migration 0004 adds the reconciled checkpoint ID, a digest of its state and next nodes, and the most recent execution evidence to task metadata. Synchronization updates these fields in the transaction that consumes the signal. The initial LangGraph input checkpoint is resumable after matching its raw input to the original request. Subsequent reads reconcile checkpoints with task status, decisions and committed revisions. A missing or inconsistent history with durable evidence marks the task `recovery_required` and preserves its approval, execution evidence and audit events. Readiness probes checkpoint storage independently of task execution.
 There is a 20-step graph recursion limit and a 20-second planning budget checked at
 step boundaries. Post-check can finish after the planning budget if execution committed.
 
@@ -43,7 +44,6 @@ and expected configuration checksum. It marks an unverifiable receipt as requiri
 recovery. These checks operate exclusively on mock state.
 
 The offline hardware adapter reads a bounded local catalog and performs zero network
-requests. Optional LiteLLM sees only a restricted set of typed candidates and has no
-tools. Final selection membership, policy validation, diff and execution remain
+requests. Unique candidates are selected locally. Optional LiteLLM selects among ambiguous options by call-local IDs and operation kinds. Provider diagnostics are isolated from application logs. Final selection membership, policy validation, diff and execution remain
 deterministic. Live search, Containerlab image verification and Workforce integration
 are later stages.

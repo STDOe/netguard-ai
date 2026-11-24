@@ -45,7 +45,6 @@ class Settings(DatabaseSettings):
                 or base.fragment
                 or (
                     base.scheme == "http"
-                    and not ollama
                     and base.hostname not in ("localhost", "127.0.0.1", "::1")
                 )
             ):

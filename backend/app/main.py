@@ -226,8 +226,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             if settings.database_path.is_file() and storage.check_ready(expected_heads):
                 networks.check_ready()
+                workflows.check_ready()
                 return contracts.Health()
-        except SQLAlchemyError as error:
+        except (SQLAlchemyError, WorkflowError) as error:
             raise HTTPException(503) from error
         raise HTTPException(503)
 
