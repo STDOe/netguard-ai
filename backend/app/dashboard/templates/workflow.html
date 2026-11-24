@@ -1,0 +1,43 @@
+{% if page == 'workspace' %}
+<section class="panel">
+  <div class="panel-heading"><h2>Brownfield task</h2></div>
+  <form id="brownfield" class="field-grid">
+    <label>Device<select id="route-device" required></select></label>
+    <label>Destination subnet<select id="route-subnet" required></select></label>
+    <label class="checkbox-line"><input id="dry-run" type="checkbox" checked{% if not can_change %} disabled{% endif %}> Dry-run only</label>
+    <button class="primary" type="submit">Generate route plan</button>
+    <details class="full">
+      <summary>Typed goal JSON</summary>
+      <label for="custom-goal">Optional ChangeIntent</label>
+      <textarea id="custom-goal" rows="4" maxlength="8192" placeholder="Leave blank for the route finder"></textarea>
+    </details>
+  </form>
+</section>
+{% elif page == 'greenfield' %}
+<section class="panel">
+  <div class="panel-heading"><h2>Design requirements</h2></div>
+  <form id="greenfield" class="field-grid">
+    <label>Organization<select name="organization"><option value="">Select…</option>{% for item in ('retail','enterprise','education','healthcare','other') %}<option>{{ item }}</option>{% endfor %}</select></label>
+    {% for field, label, min, max in [('sites','Sites',1,32),('users_per_site','Users per site',0,100000),('devices_per_site','Devices per site',0,100000),('registers_per_site','Registers per site',0,100000),('throughput_mbps','Throughput (Mbps)',1,1000000000000),('packets_per_second','Packets per second',1,1000000000000),('budget_minor','Budget in minor units',1,1000000000000)] %}
+    <label>{{ label }}<input name="{{ field }}" type="number" min="{{ min }}" max="{{ max }}"></label>
+    {% endfor %}
+    <label>Currency<input name="currency" pattern="[A-Z]{3}" maxlength="3" placeholder="USD"></label>
+    <label>Region<input name="region" pattern="[A-Z]{2}" maxlength="2" placeholder="US"></label>
+    <label>Address pool<input name="address_pool" maxlength="49" placeholder="10.40.0.0/16"></label>
+    <label>Vendors (comma-separated)<input name="vendors" maxlength="500"></label>
+    <label>Availability<select name="availability"><option value="">Select…</option><option>single</option><option>redundant</option></select></label>
+    <fieldset><legend>Security controls</legend>{% for item in ('segmentation','egress_filter','logging','payment_isolation') %}<label class="checkbox-line"><input type="checkbox" name="security" value="{{ item }}"> {{ item|replace('_',' ') }}</label>{% endfor %}</fieldset>
+    <fieldset><legend>Services</legend>{% for item in ('dns','dhcp','ntp','monitoring','voice','point_of_sale') %}<label class="checkbox-line"><input type="checkbox" name="services" value="{{ item }}"> {{ item|replace('_',' ') }}</label>{% endfor %}</fieldset>
+    <div class="full flex flex-wrap gap-2"><button name="operation" value="create" class="primary">Start design</button><button name="operation" value="input" id="send-input" hidden>Submit requirements to open task</button></div>
+  </form>
+</section>
+{% else %}
+<section class="panel"><div class="panel-heading"><h2>Approval inbox</h2>{% if can_approve %}<button id="refresh-inbox">Refresh</button>{% endif %}</div>
+{% if not can_approve %}<p class="muted section-note">Approval decisions require an administrator.</p>{% endif %}<div id="inbox"></div></section>
+{% endif %}
+<section class="panel">
+  <div class="panel-heading"><h2>{% if page == 'approvals' %}Plan and result{% else %}Current task{% endif %}</h2></div>
+  <form id="open-task" class="inline-form"><label for="task-id">Task ID</label><input id="task-id" maxlength="36" required><button type="submit">Open / refresh</button></form>
+  <div id="task-detail" class="task-detail"><p class="muted">Open a task to inspect its current state.</p></div>
+</section>
+<section class="panel"><div class="panel-heading"><h2>Recent workflow tasks</h2></div><div id="task-list"></div></section>

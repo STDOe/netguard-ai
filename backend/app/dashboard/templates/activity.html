@@ -1,0 +1,7 @@
+<ul class="data-list">
+  {% for entry in entries %}
+  <li><span><strong>{{ entry.event_type or "Authorization denial" }}</strong><small>{{ entry.actor or "Unauthenticated" }} · HTTP {{ entry.outcome }}</small></span><time datetime="{{ entry.occurred_at.isoformat() }}">{{ entry.occurred_at.strftime('%Y-%m-%d %H:%M UTC') }}</time></li>
+  {% else %}
+  <li class="muted">No system activity available for this role.</li>
+  {% endfor %}
+</ul>

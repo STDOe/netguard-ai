@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block scripts %}<script defer src="/static/login.js"></script>{% endblock %}
+{% block body %}
+<main class="login-layout">
+  <section class="panel login-card">
+    <div class="wordmark"><span class="brand-mark" aria-hidden="true">◇</span><span>NetGuard <strong>AI</strong></span></div>
+    <h1>Sign in</h1>
+    <p class="muted">Enter your installation token to open the standalone console.</p>
+    <form id="login" method="post" action="/session">
+      <label for="token">Access token</label><input type="password" id="token" autocomplete="off" required maxlength="128">
+      <button class="primary w-full" type="submit">Open console</button>
+      <p id="error" role="alert" class="error-text"></p>
+    </form>
+  </section>
+</main>
+{% endblock %}

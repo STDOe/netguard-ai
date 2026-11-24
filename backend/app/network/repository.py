@@ -57,6 +57,12 @@ class RevisionInfo(Model):
     restored_from: int | None
 
 
+class AuditTarget(Model):
+    id: UUID
+    name: str | None
+    snapshot_integrity: Literal["verified", "failed"]
+
+
 class NetworkSummary(Model):
     id: UUID
     name: str
@@ -137,6 +143,34 @@ class NetworkRepository:
                 )
             )
 
+    def audit_targets(self) -> list[AuditTarget]:
+        statement = (
+            select(NetworkRecord.id, RevisionRecord)
+            .outerjoin(
+                RevisionRecord,
+                (RevisionRecord.network_id == NetworkRecord.id)
+                & (RevisionRecord.revision == NetworkRecord.current_revision),
+            )
+            .order_by(NetworkRecord.id)
+        )
+        with Session(self.engine) as session:
+            targets = []
+            for network_id, record in session.execute(statement):
+                try:
+                    name = (
+                        deserialize(record).network.name if record is not None else None
+                    )
+                except CorruptSnapshot:
+                    name = None
+                targets.append(
+                    AuditTarget(
+                        id=UUID(network_id),
+                        name=name,
+                        snapshot_integrity="verified" if name is not None else "failed",
+                    )
+                )
+            return targets
+
     def summaries(self) -> list[NetworkSummary]:
         with Session(self.engine) as session:
             statement = (
@@ -170,6 +204,20 @@ class NetworkRepository:
             if record is None:
                 raise NotFound
             return deserialize(record)
+
+    def current_revision(self, network_id: UUID) -> int:
+        with Session(self.engine) as session:
+            record = session.get(NetworkRecord, str(network_id))
+            if record is None:
+                raise NotFound
+            return record.current_revision
+
+    def revision_info(self, network_id: UUID, revision: int) -> RevisionInfo:
+        with Session(self.engine) as session:
+            record = session.get(RevisionRecord, (str(network_id), revision))
+            if record is None:
+                raise NotFound
+            return RevisionInfo.model_validate(record, from_attributes=True)
 
     def history(
         self, network_id: UUID, limit: int, before_revision: int | None

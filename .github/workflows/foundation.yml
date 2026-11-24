@@ -28,6 +28,8 @@ jobs:
           uv sync --locked
           uv run --locked ruff check app migrations ../tests
           uv run --locked ruff format --check app migrations ../tests
+          uv run --locked ruff check ../deploy
+          uv run --locked ruff format --check ../deploy
           uv run --locked mypy
           uv run --locked pytest
       - name: Scan Git history for secrets
@@ -45,6 +47,8 @@ jobs:
           docker compose up --build --wait --wait-timeout 60
           curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/health/live
           curl --fail --silent --show-error http://127.0.0.1:8000/api/v1/health/ready
+          curl --fail --silent --show-error http://127.0.0.1:8000/ |
+            grep -F 'Access token'
           curl --fail --silent --show-error \
             -H "Authorization: Bearer ${NETGUARD_VIEWER_TOKEN}" \
             http://127.0.0.1:8000/api/v1/networks |

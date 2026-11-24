@@ -22,6 +22,7 @@ from app.workflows.models import (
     Requirements,
     Status,
     TaskRequest,
+    TaskSummary,
     WorkflowError,
     hash_model,
 )
@@ -121,6 +122,22 @@ class WorkflowStore:
             if record.owner != owner:
                 raise WorkflowError(403, "task_scope_denied")
             return record
+
+    def summaries(self, owner: str) -> list[TaskSummary]:
+        with Session(self.engine) as session:
+            rows = session.execute(
+                select(Task.id, Task.kind, Task.status)
+                .join(WorkflowRecord, WorkflowRecord.task_id == Task.id)
+                .where(WorkflowRecord.owner == owner)
+                .join(WorkflowEvent, WorkflowEvent.task_id == Task.id)
+                .where(WorkflowEvent.step == "task.created")
+                .order_by(WorkflowEvent.sequence.desc())
+                .limit(100)
+            )
+            return [
+                TaskSummary(id=UUID(task_id), kind=kind, status=status)
+                for task_id, kind, status in rows
+            ]
 
     def pending_approvals(self, owner: str) -> list[UUID]:
         with Session(self.engine) as session:

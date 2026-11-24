@@ -25,6 +25,8 @@ class Settings(DatabaseSettings):
     llm_model: str | None = None
     llm_api_base: str | None = None
     llm_api_key: SecretStr | None = None
+    honeypot_secret: SecretStr | None = None
+    web_secure_cookies: bool = False
     demo_mode: bool = True
     viewer_token: SecretStr
     admin_token: SecretStr
@@ -55,12 +57,23 @@ class Settings(DatabaseSettings):
                 raise ValueError(
                     "Configure an explicit API key for the selected provider"
                 )
+        if self.honeypot_secret is not None and not TOKEN_PATTERN.fullmatch(
+            self.honeypot_secret.get_secret_value()
+        ):
+            raise ValueError(
+                "Generate a separate honeypot secret with token_urlsafe(32)"
+            )
         if not self.demo_mode:
             raise ValueError("Foundation requires demo mode")
         viewer = self.viewer_token.get_secret_value()
         admin = self.admin_token.get_secret_value()
         if not TOKEN_PATTERN.fullmatch(viewer) or not TOKEN_PATTERN.fullmatch(admin):
             raise ValueError("Generate each local token with secrets.token_urlsafe(32)")
+        if (
+            self.honeypot_secret is not None
+            and self.honeypot_secret.get_secret_value() in (viewer, admin)
+        ):
+            raise ValueError("The honeypot secret must be independent of role tokens")
         if viewer == admin:
             raise ValueError("Local roles require distinct tokens")
         return self

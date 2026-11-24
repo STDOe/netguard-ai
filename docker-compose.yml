@@ -2,6 +2,8 @@ services:
   netguard-app:
     build: ./backend
     environment:
+      NETGUARD_HONEYPOT_SECRET: ${NETGUARD_HONEYPOT_SECRET:-}
+      NETGUARD_WEB_SECURE_COOKIES: ${NETGUARD_WEB_SECURE_COOKIES:-false}
       NETGUARD_DEMO_MODE: ${NETGUARD_DEMO_MODE:-true}
       NETGUARD_LLM_MODEL: ${NETGUARD_LLM_MODEL:-}
       NETGUARD_LLM_API_BASE: ${NETGUARD_LLM_API_BASE:-}
@@ -10,6 +12,7 @@ services:
       NETGUARD_DATABASE_PATH: /var/lib/netguard/netguard.sqlite3
       NETGUARD_VIEWER_TOKEN: ${NETGUARD_VIEWER_TOKEN:?Generate a local viewer token}
       NETGUARD_ADMIN_TOKEN: ${NETGUARD_ADMIN_TOKEN:?Generate a local admin token}
+    networks: [default, sensor]
     ports:
       - "127.0.0.1:${NETGUARD_PORT:-8000}:8000"
     volumes:
@@ -24,6 +27,37 @@ services:
       interval: 3s
       timeout: 4s
       retries: 10
+
+  opencanary:
+    profiles: [honeypot]
+    image: thinkst/opencanary@sha256:ae26c92f82a1324be124792bbacb7b3cc34c4e32b041c2d207d020de1809c7b9
+    entrypoint: ["python", "/opt/netguard/forward.py"]
+    command: []
+    user: "10002:10002"
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      NETGUARD_HONEYPOT_SECRET: ${NETGUARD_HONEYPOT_SECRET:-}
+      PYTHONDONTWRITEBYTECODE: "1"
+    networks: [sensor]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ./deploy/opencanary/opencanary.conf:/etc/opencanaryd/opencanary.conf:ro
+      - ./deploy/opencanary/forward.py:/opt/netguard/forward.py:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8080), 2).close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    depends_on:
+      netguard-app:
+        condition: service_healthy
+
+networks:
+  sensor:
+    internal: true
 
 volumes:
   netguard-data:

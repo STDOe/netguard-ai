@@ -1,0 +1,17 @@
+{% if page == 'overview' %}
+<section id="metrics" class="metric-grid" aria-label="Network metrics">
+  <div class="panel metric"><span>Virtual devices</span><strong id="device-count">—</strong><small>Mock inventory</small></div>
+  <div class="panel metric"><span>Network zones</span><strong id="zone-count">—</strong><small>Configured segments</small></div>
+  <div class="panel metric"><span>Active revision</span><strong id="revision-count">—</strong><small>Stored snapshot</small></div>
+  <div class="panel metric"><span>Pending approvals</span><strong id="approval-count">—</strong><small>Current principal</small></div>
+</section>
+{% endif %}
+<div class="network-grid">
+  <section class="panel map-panel">
+    <div class="panel-heading"><div><h2>Network map</h2><p id="map-meta" class="muted"></p></div><div class="flex flex-wrap gap-2"><button id="zoom-out" aria-label="Zoom out">−</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="fit">Fit</button><button id="refresh-map">Refresh</button></div></div>
+    <div id="network-map" class="map" aria-label="Virtual network diagram"></div>
+    <div class="legend"><span class="core">Core</span><span class="spoke">Spoke</span><span class="zone">Zone</span><span class="honeypot">Honeypot</span><span class="muted">Physical availability unknown</span></div>
+  </section>
+  <section class="panel inspector"><div class="panel-heading"><h2>Device inspector</h2></div><label for="device">Select a device</label><select id="device"></select><div id="device-detail"></div></section>
+</div>
+{% if page == 'overview' %}<section class="panel"><div class="panel-heading"><h2>Security audit</h2><a href="/dashboard/audit">Open reports ↗</a></div><p id="audit-overview" class="section-note muted">Loading report status…</p></section>{% endif %}
