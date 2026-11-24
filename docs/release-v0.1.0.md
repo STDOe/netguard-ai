@@ -22,6 +22,18 @@ flowchart LR
   Webhook --> DB
 ```
 
+## Verified for the release candidate
+
+Local acceptance covered a clean Compose install, browser operation with
+integration disabled, and the integration HTTP client with the service enabled.
+A local Admin approved a service proposal through the Dashboard. After
+restart and after restoration into a separate volume, the task and approval,
+event IDs, snapshot hash, audit report and artifact hashes matched the source.
+The application and checkpoint SQLite databases passed their consistency checks.
+
+The hosted GitHub Actions run remains a release gate. The v0.1.0 tag belongs
+on the accepted main commit after review and CI.
+
 ## Known limitations
 
 External AI Workforce OS compatibility is unverified. Workflows use mock
