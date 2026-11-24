@@ -1,13 +1,29 @@
 import re
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from hashlib import sha256
 from pathlib import Path
 from typing import Annotated, Self
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AwareDatetime, Field, SecretStr, StringConstraints, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_PROFILE = Path(__file__).resolve().parents[1] / "config" / "profiles"
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,128}")
+
+
+class Scope(StrEnum):
+    CAPABILITIES = "integration:capabilities:read"
+    CREATE = "integration:tasks:create"
+    TASK = "integration:tasks:read"
+    CANCEL = "integration:tasks:cancel"
+    EVENTS = "integration:events:read"
+    ARTIFACTS = "integration:artifacts:read"
+    APPROVAL = "integration:approvals:read"
+
+
+IntegrationName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]{0,47}$")]
 
 
 class DatabaseSettings(BaseSettings):
@@ -27,6 +43,12 @@ class Settings(DatabaseSettings):
     llm_api_key: SecretStr | None = None
     honeypot_secret: SecretStr | None = None
     web_secure_cookies: bool = False
+    integration_enabled: bool = False
+    integration_caller: IntegrationName = "workforce"
+    integration_workspace: IntegrationName = "lab"
+    integration_token_sha256: SecretStr | None = None
+    integration_expires_at: AwareDatetime | None = None
+    integration_scopes: frozenset[Scope] = frozenset()
     demo_mode: bool = True
     viewer_token: SecretStr
     admin_token: SecretStr
@@ -76,4 +98,24 @@ class Settings(DatabaseSettings):
             raise ValueError("The honeypot secret must be independent of role tokens")
         if viewer == admin:
             raise ValueError("Local roles require distinct tokens")
+        if self.integration_token_sha256 is not None:
+            digest = self.integration_token_sha256.get_secret_value()
+            local_tokens = [viewer, admin]
+            if self.honeypot_secret is not None:
+                local_tokens.append(self.honeypot_secret.get_secret_value())
+            if not re.fullmatch(r"[a-f0-9]{64}", digest) or any(
+                sha256(token.encode()).hexdigest() == digest for token in local_tokens
+            ):
+                raise ValueError(
+                    "Configure an independent, SHA-256 hashed integration token"
+                )
+        if self.integration_enabled and (
+            self.integration_token_sha256 is None
+            or self.integration_expires_at is None
+            or self.integration_expires_at > datetime.now(UTC) + timedelta(days=30)
+            or not self.integration_scopes
+        ):
+            raise ValueError(
+                "Configure integration scopes, token digest and expiry within 30 days"
+            )
         return self

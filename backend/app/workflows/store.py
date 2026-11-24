@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID, uuid4, uuid5
@@ -9,7 +10,9 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     select,
+    update,
 )
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -18,6 +21,8 @@ from app.network.models import Model
 from app.storage import Base, Task
 from app.workflows.models import (
     Approval,
+    AuditRequest,
+    BrownfieldRequest,
     Event,
     Requirements,
     Status,
@@ -48,11 +53,17 @@ class WorkflowRecord(Base):
     correlation_id: Mapped[str] = mapped_column(String(36))
     initial_request_id: Mapped[str] = mapped_column(String(36))
     payload: Mapped[str] = mapped_column(Text)
+    workspace: Mapped[str | None] = mapped_column(String(64))
     pending: Mapped[str | None] = mapped_column(Text)
     checkpoint_id: Mapped[str | None] = mapped_column(String(36))
     checkpoint_digest: Mapped[str | None] = mapped_column(String(64))
     verified_result: Mapped[str | None] = mapped_column(Text)
     recovery_code: Mapped[str | None] = mapped_column(String(64))
+
+    @property
+    def payload_kind(self) -> str:
+        kind: str = json.loads(self.payload)["kind"]
+        return kind
 
 
 class WorkflowEvent(Base):
@@ -82,9 +93,16 @@ class WorkflowStore:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
 
-    def create(self, owner: str, request_id: UUID, body: TaskRequest) -> WorkflowRecord:
+    def create(
+        self,
+        owner: str,
+        request_id: UUID,
+        body: TaskRequest | AuditRequest,
+        workspace: str | None = None,
+    ) -> WorkflowRecord:
         fingerprint = hash_model(body)
         with Session(self.engine, expire_on_commit=False) as session, session.begin():
+            session.execute(update(WorkflowRecord).where(false()).values(owner=owner))
             existing = session.scalar(
                 select(WorkflowRecord).where(
                     WorkflowRecord.owner == owner,
@@ -92,7 +110,10 @@ class WorkflowStore:
                 )
             )
             if existing is not None:
-                if existing.request_hash != fingerprint:
+                if (
+                    existing.request_hash != fingerprint
+                    or existing.workspace != workspace
+                ):
                     raise WorkflowError(409, "idempotency_conflict")
                 return existing
             task_id = uuid4()
@@ -102,6 +123,7 @@ class WorkflowStore:
                 task_id=str(task_id),
                 thread_id=str(uuid4()),
                 owner=owner,
+                workspace=workspace,
                 request_hash=fingerprint,
                 idempotency_key=body.idempotency_key,
                 correlation_id=str(uuid4()),
@@ -109,7 +131,7 @@ class WorkflowStore:
                 payload=body.model_dump_json(),
             )
             session.add(record)
-            self._event(
+            self.append_event(
                 session, task_id, task_id, "task.created", owner, request_id, None
             )
             return record
@@ -122,6 +144,30 @@ class WorkflowStore:
             if record.owner != owner:
                 raise WorkflowError(403, "task_scope_denied")
             return record
+
+    def scoped(self, task_id: UUID, owner: str, workspace: str) -> WorkflowRecord:
+        with Session(self.engine) as session:
+            record = session.get(WorkflowRecord, str(task_id))
+            if record is None or record.owner != owner or record.workspace != workspace:
+                raise WorkflowError(404, "task_not_found")
+            return record
+
+    def approval_owner(self, task_id: UUID, actor: str) -> str:
+        with Session(self.engine) as session:
+            record = session.get(WorkflowRecord, str(task_id))
+            task = session.get(Task, str(task_id))
+            if (
+                task is not None
+                and task.kind == "brownfield"
+                and actor == "admin"
+                and record is not None
+                and record.workspace is not None
+                and record.owner.startswith("service:")
+                and BrownfieldRequest.model_validate_json(record.payload).dry_run
+                is False
+            ):
+                return record.owner
+            return actor
 
     def summaries(self, owner: str) -> list[TaskSummary]:
         with Session(self.engine) as session:
@@ -145,7 +191,14 @@ class WorkflowStore:
                 select(WorkflowRecord.task_id)
                 .join(Task, Task.id == WorkflowRecord.task_id)
                 .where(
-                    WorkflowRecord.owner == owner, Task.status == "awaiting_approval"
+                    (WorkflowRecord.owner == owner)
+                    | (
+                        WorkflowRecord.owner.startswith("service:")
+                        & WorkflowRecord.workspace.is_not(None)
+                        & (Task.kind == "brownfield")
+                        & (owner == "admin")
+                    ),
+                    Task.status == "awaiting_approval",
                 )
                 .order_by(WorkflowRecord.task_id)
                 .limit(50)
@@ -173,7 +226,7 @@ class WorkflowStore:
                 if approval is None
                 else f"approval.{approval.decision}"
             )
-            event_id = self._event(
+            event_id = self.append_event(
                 session,
                 task_id,
                 signal.id,
@@ -279,10 +332,10 @@ class WorkflowStore:
         code: str | None = None,
     ) -> None:
         with Session(self.engine) as session, session.begin():
-            self._event(session, task_id, action, step, actor, request_id, code)
+            self.append_event(session, task_id, action, step, actor, request_id, code)
 
     @staticmethod
-    def _event(
+    def append_event(
         session: Session,
         task_id: UUID,
         action: UUID,
@@ -306,6 +359,18 @@ class WorkflowStore:
             .on_conflict_do_nothing(index_elements=[WorkflowEvent.id])
         )
         return event_id
+
+    def event_page(self, task_id: UUID, after: int, limit: int) -> list[WorkflowEvent]:
+        with Session(self.engine) as session:
+            return list(
+                session.scalars(
+                    select(WorkflowEvent)
+                    .where(WorkflowEvent.task_id == str(task_id))
+                    .order_by(WorkflowEvent.sequence)
+                    .offset(after)
+                    .limit(limit)
+                )
+            )
 
     def events(self, task_id: UUID) -> list[Event]:
         with Session(self.engine) as session:

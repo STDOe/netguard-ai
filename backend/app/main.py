@@ -21,6 +21,8 @@ from app.dashboard.api import security_router
 from app.dashboard.audit import Audits
 from app.dashboard.honeypot import Honeypot
 from app.dashboard.web import ROOT, web_router
+from app.integration.api import router_for
+from app.integration.auth import IntegrationAuth
 from app.network.api import NetworkErrorResponse, failure, network_router
 from app.network.driver import MockNetworkDriver
 from app.network.errors import NetworkError, PolicyBlocked
@@ -71,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     storage = Storage(sqlite_engine(settings.database_path))
     networks = NetworkRepository(storage.engine)
     driver = MockNetworkDriver(networks, load_profile(settings.profile_path))
+    audits = Audits(storage.engine, driver)
     workflow_store = WorkflowStore(storage.engine)
     workflows = Runtime(
         settings.database_path, WorkflowNodes(settings, workflow_store, driver)
@@ -118,8 +121,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response = error_response(request, 500)
 
         audit_write_failed = getattr(request.state, "audit_write_failed", False)
-        if response.status_code in (401, 403) and not getattr(
-            request.state, "network_attempt", None
+        if response.status_code in (401, 403) and not (
+            getattr(request.state, "network_attempt", None)
+            or getattr(request.state, "integration_auth", False)
         ):
             try:
                 await run_in_threadpool(
@@ -217,7 +221,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request_id=request.state.request_id,
             )
         )
-        return JSONResponse(body.model_dump(), status_code=error.status)
+        headers = (
+            {"Retry-After": "60"}
+            if error.status == 429
+            else {"WWW-Authenticate": "Bearer"}
+            if error.status == 401
+            else None
+        )
+        return JSONResponse(
+            body.model_dump(), status_code=error.status, headers=headers
+        )
 
     @app.exception_handler(SQLAlchemyError)
     async def handle_storage_error(
@@ -284,7 +297,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(
         security_router(
             settings,
-            Audits(storage.engine, driver),
+            audits,
             Honeypot(
                 storage.engine,
                 driver,
@@ -296,4 +309,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(network_router(settings, driver))
     app.include_router(workflow_router(settings, workflows))
+    app.state.integration_router = router_for(
+        IntegrationAuth(settings, storage), workflows, audits
+    )
+    app.include_router(app.state.integration_router)
     return app

@@ -100,6 +100,12 @@ class BrownfieldRequest(Model):
     dry_run: Annotated[bool, Field(strict=True)] = False
 
 
+class AuditRequest(Model):
+    kind: Literal["audit"]
+    idempotency_key: Key
+    network_id: UUID
+
+
 TaskRequest = Annotated[
     GreenfieldRequest | BrownfieldRequest, Field(discriminator="kind")
 ]
@@ -213,6 +219,7 @@ class TaskView(Model):
     schema_version: Literal[1] = SCHEMA_VERSION
     kind: Kind
     status: Status
+    requested_by_service: bool = False
     code: str | None = None
     missing: tuple[str, ...] = ()
     plan: Plan | None = None

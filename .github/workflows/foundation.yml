@@ -32,6 +32,11 @@ jobs:
           uv run --locked ruff format --check ../deploy
           uv run --locked mypy
           uv run --locked pytest
+      - name: Audit locked runtime dependencies
+        working-directory: backend
+        run: |
+          uv export --locked --no-dev --no-emit-project --no-hashes -o "$RUNNER_TEMP/netguard-requirements.txt"
+          uvx --from pip-audit==2.10.0 pip-audit --disable-pip --no-deps -r "$RUNNER_TEMP/netguard-requirements.txt"
       - name: Scan Git history for secrets
         run: |
           docker run --rm -v "$PWD:/repo:ro" -w /repo \
@@ -67,3 +72,14 @@ jobs:
             -H "Authorization: Bearer ${NETGUARD_VIEWER_TOKEN}" \
             "http://127.0.0.1:8000/api/v1/tasks/${task_id}" |
             python -c 'import json,sys; assert json.load(sys.stdin)["status"]=="awaiting_input"'
+          docker compose exec -T netguard-app python - --disabled < deploy/workforce/client.py
+          NETGUARD_WORKFORCE_TOKEN="$(python -c 'import secrets; print("ngw." + secrets.token_urlsafe(32))')"
+          export NETGUARD_WORKFORCE_TOKEN
+          NETGUARD_INTEGRATION_TOKEN_SHA256="$(python -c 'import hashlib, os; print(hashlib.sha256(os.environ["NETGUARD_WORKFORCE_TOKEN"].encode()).hexdigest())')"
+          NETGUARD_INTEGRATION_EXPIRES_AT="$(python -c 'from datetime import UTC, datetime, timedelta; print((datetime.now(UTC) + timedelta(hours=1)).isoformat())')"
+          NETGUARD_INTEGRATION_SCOPES="$(python -c 'import json,sys; print(json.dumps(["integration:" + item for item in sys.argv[1:]]))' \
+            capabilities:read tasks:create tasks:read tasks:cancel events:read artifacts:read approvals:read)"
+          NETGUARD_INTEGRATION_ENABLED=true
+          export NETGUARD_INTEGRATION_ENABLED NETGUARD_INTEGRATION_TOKEN_SHA256 NETGUARD_INTEGRATION_EXPIRES_AT NETGUARD_INTEGRATION_SCOPES
+          docker compose up --no-build --wait --wait-timeout 60
+          docker compose exec -T -e NETGUARD_WORKFORCE_TOKEN netguard-app python - < deploy/workforce/client.py

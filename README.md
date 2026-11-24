@@ -1,6 +1,9 @@
 # NetGuard AI
 
-NetGuard AI is a network design and security application with a standalone backend and a future AI Workforce OS integration. The current stage is **Dashboard, Security Audit and Honeypot Demo (v0.1)** with a persistent mock network. The backend reports `demo_mode: true`. Workflows run offline by default and operate on mock networks.
+NetGuard AI is a network design and security application with a standalone backend and an optional Workforce Integration Contract. The current stage is **v0.1.0 release candidate** with a persistent mock network. The backend reports `demo_mode: true`. Workflows run offline by default and operate on mock networks.
+
+
+[Clean install](docs/quickstart-v0.1.md) · [Integration Contract v1](docs/integration-v1.md) · [Deployment security and recovery](docs/deployment-security.md) · [Release notes and acceptance](docs/release-v0.1.0.md)
 
 ## Local development
 
