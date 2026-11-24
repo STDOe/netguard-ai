@@ -1,8 +1,10 @@
 # NetGuard AI
 
-NetGuard AI is a network design and security application with a standalone backend and a future AI Workforce OS integration. The current stage is **Network Core (v0.1)** with a persistent mock network. The backend reports `demo_mode: true` and has no network device or LLM connectivity.
+NetGuard AI is a network design and security application with a standalone backend and a future AI Workforce OS integration. The current stage is **Agent Workflows (v0.1)** with a persistent mock network. The backend reports `demo_mode: true`. Workflows run offline by default and operate on mock networks.
 
 ## Local development
+
+Native execution requires Linux or another POSIX system with local filesystem support for `fcntl.flock`. On Windows use Docker Desktop with Linux containers or WSL 2.
 
 Use Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/). The lockfile supplies reproducible Python dependencies.
 
@@ -108,6 +110,17 @@ peer. The model covers these simulated paths and assumes no NAT. Multi-hop reach
 dynamic routing and real device dataplanes are outside the model. Findings with insufficient
 information are `unknown` and block writes.
 
+## Agent Workflows
+
+Greenfield collects requirements and exports a validated logical design and BOM. Brownfield
+builds a deterministic diff and supports dry-run or a hash-bound Admin approval before
+a mock apply. LangGraph checkpoints allow both workflows to resume after restart.
+
+See [workflow API, states, offline sourcing and LiteLLM configuration](docs/workflows.md)
+and the [checkpoint and approval ADR](docs/architecture/0004-agent-checkpoints-and-approvals.md).
+The SQLite application database and its adjacent checkpoint database share the Compose
+volume. Keep both when migrating or backing up a deployment.
+
 ## Verification
 
 Run from `backend/` after `uv sync --locked`:
@@ -122,6 +135,6 @@ uv run --locked pytest
 The test suite covers the Foundation contracts, migration from the Foundation schema, policy
 isolation, authorization, concurrent edits, atomic rollback, and corrupt snapshot rejection.
 The pull request workflow runs lint, type checks, tests, Gitleaks, and a Compose smoke test
-that checks readiness and the seeded demo network.
+that checks readiness, the seeded demo network and an interview checkpoint after restart.
 
 See [Foundation ADRs](docs/architecture/) and the [master specification](docs/NetGuard_AI_TZ_v2.0.md).

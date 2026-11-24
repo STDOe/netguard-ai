@@ -23,6 +23,11 @@ from app.network.policy import load_profile
 from app.network.repository import NetworkRepository
 from app.security import Permission, authorizer
 from app.storage import Storage, audit_event, sqlite_engine
+from app.workflows.api import workflow_router
+from app.workflows.graph import WorkflowNodes
+from app.workflows.models import WorkflowError
+from app.workflows.runtime import Runtime
+from app.workflows.store import WorkflowStore
 
 logger = logging.getLogger("netguard.request")
 if not logger.handlers:
@@ -58,6 +63,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     storage = Storage(sqlite_engine(settings.database_path))
     networks = NetworkRepository(storage.engine)
     driver = MockNetworkDriver(networks, load_profile(settings.profile_path))
+    workflow_store = WorkflowStore(storage.engine)
+    workflows = Runtime(
+        settings.database_path, WorkflowNodes(settings, workflow_store, driver)
+    )
     versions = ScriptDirectory(str(Path(__file__).resolve().parents[1] / "migrations"))
     expected_heads = set(versions.get_heads())
 
@@ -178,6 +187,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status_code=status,
         )
 
+    @app.exception_handler(WorkflowError)
+    async def handle_workflow_error(
+        request: Request, error: WorkflowError
+    ) -> JSONResponse:
+        body = contracts.ErrorResponse(
+            error=contracts.ErrorDetail(
+                code=error.code,
+                message="Workflow request could not be completed",
+                request_id=request.state.request_id,
+            )
+        )
+        return JSONResponse(body.model_dump(), status_code=error.status)
+
     @app.exception_handler(SQLAlchemyError)
     async def handle_storage_error(
         request: Request, _: SQLAlchemyError
@@ -204,8 +226,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             if settings.database_path.is_file() and storage.check_ready(expected_heads):
                 networks.check_ready()
+                workflows.check_ready()
                 return contracts.Health()
-        except SQLAlchemyError as error:
+        except (SQLAlchemyError, WorkflowError) as error:
             raise HTTPException(503) from error
         raise HTTPException(503)
 
@@ -238,4 +261,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(api)
     app.include_router(network_router(settings, driver))
+    app.include_router(workflow_router(settings, workflows))
     return app

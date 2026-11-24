@@ -25,7 +25,7 @@ from app.network.models import (
     StaticRoute,
 )
 from app.network.policy import Finding, PolicyEngine, Profile
-from app.network.repository import NetworkRepository
+from app.network.repository import ExecutionGuard, NetworkRepository
 
 
 class PutStaticRoute(Model):
@@ -112,6 +112,12 @@ class MockNetworkDriver(BaseNetworkDriver):
     def check(self, snapshot: NetworkSnapshot) -> tuple[Finding, ...]:
         return self.policy.evaluate(snapshot.network, self.profile)
 
+    def preview(
+        self, snapshot: NetworkSnapshot, change: Change
+    ) -> tuple[Network, tuple[Finding, ...]]:
+        candidate = self._propose(snapshot.network, change)
+        return candidate, self.policy.evaluate(candidate, self.profile)
+
     def _check_candidate(self, network: Network) -> str:
         findings = self.policy.evaluate(network, self.profile)
         if self.profile is None or any(
@@ -127,6 +133,8 @@ class MockNetworkDriver(BaseNetworkDriver):
         change: Change,
         request_id: str,
         actor: str,
+        *,
+        execution: ExecutionGuard | None = None,
     ) -> NetworkSnapshot:
         return self._mutate(
             network_id,
@@ -134,6 +142,7 @@ class MockNetworkDriver(BaseNetworkDriver):
             request_id,
             actor,
             lambda network: self._propose(network, change),
+            execution=execution,
         )
 
     def restore(
@@ -161,6 +170,8 @@ class MockNetworkDriver(BaseNetworkDriver):
         actor: str,
         transform: Callable[[Network], Network],
         restored_from: int | None = None,
+        *,
+        execution: ExecutionGuard | None = None,
     ) -> NetworkSnapshot:
         current = self.get_snapshot(network_id)
         if current.revision != expected_revision:
@@ -175,6 +186,7 @@ class MockNetworkDriver(BaseNetworkDriver):
             request_id,
             actor,
             restored_from,
+            execution=execution,
         )
 
     @staticmethod

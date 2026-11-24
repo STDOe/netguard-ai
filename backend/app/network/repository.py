@@ -1,18 +1,31 @@
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from hashlib import sha256
 from json import dumps
 from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import Engine, ForeignKey, Integer, String, Text, select, update
+from sqlalchemy import Engine, ForeignKey, Index, Integer, String, Text, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from app.network.errors import CorruptSnapshot, NotFound, RevisionConflict
+from app.network.errors import (
+    CorruptSnapshot,
+    ExecutionExpired,
+    NotFound,
+    RevisionConflict,
+)
 from app.network.models import Model, Network, NetworkSnapshot
 from app.storage import Base, audit_event
 
 Operation = Literal["seed", "change", "restore"]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionGuard:
+    plan_hash: str
+    expires_at: datetime
 
 
 class NetworkRecord(Base):
@@ -24,6 +37,7 @@ class NetworkRecord(Base):
 
 class RevisionRecord(Base):
     __tablename__ = "network_revisions"
+    __table_args__ = (Index("uq_network_execution_key", "execution_key", unique=True),)
 
     network_id: Mapped[str] = mapped_column(ForeignKey("networks.id"), primary_key=True)
     revision: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -32,6 +46,7 @@ class RevisionRecord(Base):
     operation: Mapped[Operation] = mapped_column(String(16))
     policy_version: Mapped[str] = mapped_column(String(80))
     restored_from: Mapped[int | None] = mapped_column(Integer)
+    execution_key: Mapped[str | None] = mapped_column(String(64))
 
 
 class RevisionInfo(Model):
@@ -180,6 +195,18 @@ class NetworkRepository:
                 )
             ]
 
+    def execution_receipt(
+        self, network_id: UUID, plan_hash: str
+    ) -> NetworkSnapshot | None:
+        with Session(self.engine) as session:
+            record = session.scalar(
+                select(RevisionRecord).where(
+                    RevisionRecord.network_id == str(network_id),
+                    RevisionRecord.execution_key == plan_hash,
+                )
+            )
+            return None if record is None else deserialize(record)
+
     def commit(
         self,
         network: Network,
@@ -189,6 +216,8 @@ class NetworkRepository:
         request_id: str,
         actor: str,
         restored_from: int | None = None,
+        *,
+        execution: ExecutionGuard | None = None,
     ) -> NetworkSnapshot:
         revision = expected_revision + 1
         record = serialize(network, revision, operation, policy_version, restored_from)
@@ -207,6 +236,10 @@ class NetworkRepository:
             )
             if session.scalar(statement) is None:
                 raise RevisionConflict
+            if execution is not None:
+                if datetime.now(UTC) >= execution.expires_at:
+                    raise ExecutionExpired
+                record.execution_key = execution.plan_hash
             session.add(record)
             session.add(
                 audit_event(

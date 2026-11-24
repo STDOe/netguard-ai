@@ -19,16 +19,26 @@ class Permission(StrEnum):
     READ_AUDIT = "audit:read"
     READ_NETWORK = "network:read"
     CHANGE_NETWORK = "network:change"
+    USE_WORKFLOWS = "workflow:use"
+    APPROVE_WORKFLOW = "workflow:approve"
 
 
 ROLE_PERMISSIONS = {
-    Role.VIEWER: frozenset({Permission.READ_CAPABILITIES, Permission.READ_NETWORK}),
+    Role.VIEWER: frozenset(
+        {
+            Permission.READ_CAPABILITIES,
+            Permission.READ_NETWORK,
+            Permission.USE_WORKFLOWS,
+        }
+    ),
     Role.ADMIN: frozenset(
         {
             Permission.READ_CAPABILITIES,
             Permission.READ_AUDIT,
             Permission.READ_NETWORK,
             Permission.CHANGE_NETWORK,
+            Permission.USE_WORKFLOWS,
+            Permission.APPROVE_WORKFLOW,
         }
     ),
 }

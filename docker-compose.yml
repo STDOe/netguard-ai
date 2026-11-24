@@ -3,6 +3,10 @@ services:
     build: ./backend
     environment:
       NETGUARD_DEMO_MODE: ${NETGUARD_DEMO_MODE:-true}
+      NETGUARD_LLM_MODEL: ${NETGUARD_LLM_MODEL:-}
+      NETGUARD_LLM_API_BASE: ${NETGUARD_LLM_API_BASE:-}
+      NETGUARD_LLM_API_KEY: ${NETGUARD_LLM_API_KEY:-}
+      NETGUARD_WORKFLOW_APPROVAL_TTL_SECONDS: ${NETGUARD_WORKFLOW_APPROVAL_TTL_SECONDS:-300}
       NETGUARD_DATABASE_PATH: /var/lib/netguard/netguard.sqlite3
       NETGUARD_VIEWER_TOKEN: ${NETGUARD_VIEWER_TOKEN:?Generate a local viewer token}
       NETGUARD_ADMIN_TOKEN: ${NETGUARD_ADMIN_TOKEN:?Generate a local admin token}
