@@ -9,6 +9,7 @@ const map = byId('network-map') ? mapPanel(refreshNetwork) : null;
 const workflow = byId('task-list') ? workflows(page, shell) : null;
 
 function score(report) {
+  if (report.evidence_status === 'corrupt') return 'Report evidence is corrupt · Score unavailable';
   return `${report.score.value === null ? 'Score unavailable' : `${report.score.value} / 100`} · ${report.score.coverage}% coverage`;
 }
 
@@ -54,7 +55,10 @@ async function refreshNetwork() {
       } else byId('approval-count').textContent = 'Restricted';
     }
   }
-  if (page === 'audit') byId('audit-detail').hidden = true;
+  if (page === 'audit') {
+    byId('audit-detail').hidden = true;
+    byId('snapshot-warning').hidden = picker.selectedOptions[0]?.dataset.integrity !== 'failed';
+  }
   if (page === 'audit' || page === 'overview') await reports();
   await workflow?.network(picker.value);
 }
@@ -87,8 +91,12 @@ document.body.addEventListener('htmx:sendError', () => notice('Unable to reach N
 
 action(async () => {
   if (picker) {
-    const networks = await api('/api/v1/networks');
-    picker.replaceChildren(...networks.map(net => option(net.id, net.name)));
+    const networks = await api(page === 'audit' ? '/api/v1/audit/networks' : '/api/v1/networks');
+    picker.replaceChildren(...networks.map(net => {
+      const item = option(net.id, net.name ?? net.id);
+      if (net.snapshot_integrity) item.dataset.integrity = net.snapshot_integrity;
+      return item;
+    }));
     if (!networks.length) picker.replaceChildren(option('', 'No mock network available'));
     else await refreshNetwork();
   }

@@ -57,6 +57,12 @@ class RevisionInfo(Model):
     restored_from: int | None
 
 
+class AuditTarget(Model):
+    id: UUID
+    name: str | None
+    snapshot_integrity: Literal["verified", "failed"]
+
+
 class NetworkSummary(Model):
     id: UUID
     name: str
@@ -136,6 +142,34 @@ class NetworkRepository:
                     policy_version=policy_version,
                 )
             )
+
+    def audit_targets(self) -> list[AuditTarget]:
+        statement = (
+            select(NetworkRecord.id, RevisionRecord)
+            .outerjoin(
+                RevisionRecord,
+                (RevisionRecord.network_id == NetworkRecord.id)
+                & (RevisionRecord.revision == NetworkRecord.current_revision),
+            )
+            .order_by(NetworkRecord.id)
+        )
+        with Session(self.engine) as session:
+            targets = []
+            for network_id, record in session.execute(statement):
+                try:
+                    name = (
+                        deserialize(record).network.name if record is not None else None
+                    )
+                except CorruptSnapshot:
+                    name = None
+                targets.append(
+                    AuditTarget(
+                        id=UUID(network_id),
+                        name=name,
+                        snapshot_integrity="verified" if name is not None else "failed",
+                    )
+                )
+            return targets
 
     def summaries(self) -> list[NetworkSummary]:
         with Session(self.engine) as session:

@@ -34,7 +34,7 @@
       {% else %}Workflow history and completed security operations.{% endif %}
       </p></div>
       {% if page in ('overview','topology','workspace','approvals','audit') %}
-      <label class="network-picker" for="network">Network<select id="network"><option>Loading…</option></select></label>
+      <label class="network-picker" for="network">Network<select id="network"><option value="">Loading…</option></select></label>
       {% endif %}
       </div>
       <p id="status" class="notice" role="status" hidden></p>
@@ -43,6 +43,7 @@
       {% elif page in ('workspace','greenfield','approvals') %}
       {% include "workflow.html" %}
       {% elif page == 'audit' %}
+      <p id="snapshot-warning" class="notice error" role="alert" hidden>Snapshot integrity check failed. Historical reports and integrity diagnostics are available for this network ID.</p>
       <section class="panel"><div class="panel-heading"><h2>Saved reports</h2>{% if can_audit %}<button id="run-audit" class="primary">Run audit</button>{% endif %}</div>
       <div id="audit-list"></div></section><section id="audit-detail" class="panel" hidden></section>
       {% elif page == 'honeypot' %}

@@ -104,6 +104,30 @@ export function workflows(page, shell) {
       `${displayDate(event.at)}  ${event.step}${event.code ? ` · ${event.code}` : ''}`).join('\n')));
   }
 
+  // Keep only a session-scoped request digest and its retry key across reloads.
+  let pendingCreate;
+  const retrySlot = `netguard.task-retry.${page}`;
+  async function createTask(request) {
+    const csrf = document.querySelector('meta[name=csrf-token]').content;
+    const bytes = new TextEncoder().encode(JSON.stringify([csrf, request]));
+    const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
+      byte => byte.toString(16).padStart(2, '0')).join('');
+    if (!pendingCreate) {
+      try { pendingCreate = JSON.parse(sessionStorage.getItem(retrySlot)); } catch { /* Storage is optional. */ }
+    }
+    if (pendingCreate?.hash !== hash || !validId.test(pendingCreate.key)) {
+      pendingCreate = {hash, key: crypto.randomUUID()};
+    }
+    const attempt = pendingCreate;
+    try { sessionStorage.setItem(retrySlot, JSON.stringify(attempt)); } catch { /* In-memory retry still works. */ }
+    const task = await api('/api/v1/tasks', {method:'POST', data:{...request, idempotency_key:attempt.key}});
+    if (pendingCreate === attempt) {
+      pendingCreate = undefined;
+      try { sessionStorage.removeItem(retrySlot); } catch { /* Storage may be unavailable. */ }
+    }
+    return task;
+  }
+
   function submit(form, run) {
     form?.addEventListener('submit', event => {
       event.preventDefault();
@@ -129,7 +153,7 @@ export function workflows(page, shell) {
     }
     const task = button?.value === 'input'
       ? await api(`/api/v1/tasks/${current.id}/input`, {method: 'POST', data: requirements})
-      : await api('/api/v1/tasks', {method:'POST', data: {kind: 'greenfield', idempotency_key: crypto.randomUUID(), requirements}});
+      : await createTask({kind: 'greenfield', requirements});
     await show(task);
     await renderTasks();
   });
@@ -142,8 +166,8 @@ export function workflows(page, shell) {
     } catch {
       throw new Error('Typed goal must be valid JSON.');
     }
-    await show(await api('/api/v1/tasks', {method:'POST', data: {kind:'brownfield', network_id:networkId,
-      dry_run: shell.dataset.canChange !== 'true' || byId('dry-run').checked, idempotency_key:crypto.randomUUID(), goal}}));
+    await show(await createTask({kind:'brownfield', network_id:networkId,
+      dry_run: shell.dataset.canChange !== 'true' || byId('dry-run').checked, goal}));
     await renderTasks();
   });
 

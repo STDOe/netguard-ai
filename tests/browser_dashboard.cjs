@@ -10,6 +10,43 @@ async function screenshot(page, name) {
   fs.mkdirSync(NETGUARD_SCREENSHOTS, {recursive: true});
   await page.screenshot({path: path.join(NETGUARD_SCREENSHOTS, name), fullPage: true});
 }
+async function retryAcceptedTask(page, name, edit) {
+  const button = page.getByRole('button', {name});
+  const tasksUrl = url + '/api/v1/tasks';
+  const before = (await (await page.request.get(tasksUrl)).json()).length;
+  const replies = [];
+  const intercept = async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const response = await route.fetch();
+    assert.equal(response.status(), 201);
+    replies.push({key: route.request().postDataJSON().idempotency_key, id:(await response.json()).id});
+    if (replies.length === 1) return route.abort('connectionreset');
+    await route.fulfill({response});
+  };
+  await page.route(tasksUrl, intercept);
+  try {
+    await button.click();
+    await page.locator('#status.error').waitFor();
+    if (edit) await edit();
+    const completed = page.waitForResponse(response =>
+      response.url() === tasksUrl && response.request().method() === 'POST');
+    await button.click();
+    await completed;
+    assert.equal(replies.length, 2);
+    await page.waitForFunction(id => document.querySelector('#task-id').value === id, replies[1].id);
+    if (edit) {
+      assert.notEqual(replies[0].key, replies[1].key);
+      assert.notEqual(replies[0].id, replies[1].id);
+    } else {
+      assert.deepEqual(replies[0], replies[1]);
+    }
+    assert.equal((await (await page.request.get(tasksUrl)).json()).length, before + (edit ? 2 : 1));
+  } finally {
+    await page.unroute(tasksUrl, intercept);
+  }
+  return replies[0];
+}
+
 (async () => {
   const browser = await chromium.launch({executablePath: process.env.NETGUARD_CHROMIUM || undefined,
     args: process.env.NETGUARD_CHROMIUM_NO_SANDBOX === '1' ? ['--no-sandbox'] : []});
@@ -23,6 +60,20 @@ async function screenshot(page, name) {
     await page.goto(url);
     await page.getByLabel('Access token').fill(NETGUARD_ADMIN_TOKEN);
     await page.getByRole('button',{name:'Open console'}).click();
+    if (process.argv.includes('--audit-recovery')) {
+      await page.getByRole('link',{name:'Security Audit'}).click();
+      await page.getByText(/Snapshot integrity check failed/).waitFor();
+      await page.getByRole('button',{name:'Show findings'}).first().click();
+      await page.locator('#audit-detail h2').filter({hasText:'Historical'}).waitFor();
+      await page.getByRole('button',{name:'Run audit'}).click();
+      const detail = page.locator('#audit-detail');
+      await detail.getByText('Score unavailable', {exact:false}).waitFor();
+      await detail.locator('li').filter({hasText:'integrity'}).getByText('fail',{exact:true}).waitFor();
+      assert.equal(await detail.getByText('pass',{exact:true}).count(), 0);
+      assert.deepEqual(issues, []);
+      console.log('Browser PASS: corrupt snapshot warning, historical report and new integrity diagnosis');
+      return;
+    }
     await page.locator('#device-count').getByText('5',{exact:true}).waitFor();
     await page.locator('#network-map canvas').first().waitFor();
     await page.locator('#activity').getByText('web.login').first().waitFor();
@@ -57,9 +108,11 @@ async function screenshot(page, name) {
     assert.equal(await page.locator('#honeypot-list b').count(),0);
     await page.unrouteAll();
     await page.getByRole('link',{name:'Greenfield Designer'}).click();
-    await page.getByRole('button',{name:'Start design'}).click();
+    const firstDesign = await retryAcceptedTask(page, 'Start design');
     await page.getByText('awaiting input',{exact:true}).first().waitFor();
-    await page.locator('select[name=organization]').selectOption('retail');
+    const nextDesign = await retryAcceptedTask(page, 'Start design', () =>
+      page.locator('select[name=organization]').selectOption('retail'));
+    assert.notEqual(nextDesign.key, firstDesign.key);
     await page.locator('select[name=availability]').selectOption('single');
     for (const [key, value] of Object.entries({sites:'2',users_per_site:'15',devices_per_site:'7',registers_per_site:'0',throughput_mbps:'100',packets_per_second:'18000',budget_minor:'20000',currency:'USD',region:'US',address_pool:'10.80.0.0/16'})) await page.locator(`input[name=${key}]`).fill(value);
     await page.getByRole('button',{name:'Submit requirements to open task'}).click();
@@ -88,7 +141,7 @@ async function screenshot(page, name) {
     await page.locator('#route-device').selectOption({label:'Infra spoke'});
     await page.locator('#route-subnet').selectOption({label:'Cash / Payment · 10.20.0.0/16'});
     await page.locator('#dry-run').uncheck();
-    await page.getByRole('button',{name:'Generate route plan'}).click();
+    await retryAcceptedTask(page, 'Generate route plan');
     await page.getByText('awaiting approval',{exact:true}).first().waitFor();
     await page.getByRole('link',{name:'Change Plans & Approvals'}).click();
     await page.getByRole('button',{name:'Review plan'}).click();
@@ -102,7 +155,7 @@ async function screenshot(page, name) {
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await screenshot(page, 'netguard-mobile.png');
     assert.deepEqual(issues,[]);
-    console.log('Browser PASS: desktop/mobile, audit, observations, Greenfield, approval, topology revision, HTML text rendering');
+    console.log('Browser PASS: Greenfield and Brownfield retries, changed request and fresh key after success, desktop/mobile, audit, observations, approval, topology and text rendering');
   } catch (error) {
     console.log(await page.locator('#status').textContent().catch(()=>null), issues);
     await screenshot(page, 'netguard-failure.png').catch(()=>{});

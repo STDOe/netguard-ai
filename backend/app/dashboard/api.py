@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.config import Settings
 from app.dashboard.audit import Audits, Report
 from app.dashboard.honeypot import CanaryView, Honeypot
+from app.network.repository import AuditTarget
 from app.security import Permission, authorizer
 
 
@@ -14,6 +15,10 @@ def security_router(
     router = APIRouter(prefix="/api/v1", tags=["security"])
     view = Depends(authorizer(settings, Permission.VIEW_SECURITY))
     run = Depends(authorizer(settings, Permission.RUN_SECURITY))
+
+    @router.get("/audit/networks", dependencies=[view])
+    def audit_targets() -> list[AuditTarget]:
+        return audits.driver.repository.audit_targets()
 
     @router.post("/networks/{network_id}/audits", dependencies=[run], status_code=201)
     def create_audit(network_id: UUID, request: Request) -> Report:

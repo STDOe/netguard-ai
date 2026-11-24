@@ -55,7 +55,7 @@ zone names yields `not_applicable`. A persisted allow across one of these isolat
 directions is a finding. The remaining catalog applies to any stored mock profile.
 Report evidence includes relevant policy check IDs, rule or object IDs, or the snapshot
 checksum. Reads do not generate reports. The current flag compares the active snapshot
-and policy fingerprint with the saved ones.
+and the complete active profile fingerprint with the saved ones.
 
 **Score 1.0** uses severity weights of 10 for critical, 5 for high, 3 for medium and 1
 for low. Let A be the sum of applicable weights, K the sum for pass and fail, and P
@@ -144,3 +144,28 @@ NODE_PATH="$browser_tools/node_modules" NETGUARD_CHROMIUM="$(command -v chromium
 
 The test uses the configured `NETGUARD_ADMIN_TOKEN` and `NETGUARD_PORT`. Set
 `NETGUARD_SCREENSHOTS` to a directory to capture both viewports.
+
+### Audit integrity and task retries
+
+The audit screen obtains registered UUIDs from the authenticated
+`GET /api/v1/audit/networks` endpoint. A missing or damaged current snapshot has
+`snapshot_integrity: failed` and no trusted display name. Its UUID still opens
+historical reports and accepts an Admin integrity audit.
+
+Score 1.0 keeps its existing weights. Unspecified forwarding or unsupported dynamic
+routing makes routing, firewall reachability, DMZ-to-Cash isolation and honeypot
+isolation unknown unless there is direct evidence of a violation. Static checks
+retain their independent findings. On the standard profile either uncertainty alone
+reduces coverage to 47%, below the numeric score threshold.
+
+Migration 0006 stores the full profile fingerprint and the ordered findings checksum.
+Both POST and GET verify the saved report against the current snapshot and profile.
+Reports created before 0006 remain historical. Reads verify the required findings,
+their scope and severity, and recompute Score 1.0. A damaged report has
+`evidence_status: corrupt`, no score and no verified findings. Reading it preserves
+both its stored evidence and other reports.
+
+After an interrupted task creation, resubmit the same Greenfield or Brownfield
+request. The tab retains its retry key and a session-bound request digest. Confirmed
+creation or a changed request gets a fresh key. The browser stores no form content
+or credentials in session storage.

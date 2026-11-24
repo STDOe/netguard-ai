@@ -1,14 +1,15 @@
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import AwareDatetime, TypeAdapter
+from pydantic import AwareDatetime, TypeAdapter, ValidationError
 from sqlalchemy import Engine, ForeignKey, Integer, String, Text, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.network.driver import MockNetworkDriver
-from app.network.errors import CorruptSnapshot
-from app.network.models import Model
+from app.network.errors import CorruptSnapshot, NotFound
+from app.network.models import Model, NetworkSnapshot
 from app.network.policy import Finding
 from app.storage import Base, audit_event
 from app.workflows.models import hash_model
@@ -19,6 +20,58 @@ WEIGHTS: dict[Severity, int] = {"critical": 10, "high": 5, "medium": 3, "low": 1
 LIMIT = (
     "Static mock configuration. No NAT, asymmetric routing or dataplane verification."
 )
+
+
+REACHABILITY_RULES = ("traffic.model", "traffic.routing")
+GROUPS: tuple[tuple[str, Severity, tuple[str, ...], str], ...] = (
+    (
+        "segmentation",
+        "high",
+        ("profile.topology", "firewall.scope"),
+        "Topology and zone membership",
+    ),
+    (
+        "default_deny",
+        "critical",
+        ("firewall.default",),
+        "Default deny and allowlist",
+    ),
+    (
+        "routing",
+        "high",
+        ("routing.policy", "routing.destination", *REACHABILITY_RULES),
+        "Routing policy and one-hop paths",
+    ),
+    (
+        "firewall",
+        "critical",
+        (
+            "firewall.scope",
+            "firewall.isolation",
+            "firewall.default",
+            "traffic.path",
+            *REACHABILITY_RULES,
+        ),
+        "Firewall rule scope and modeled reachability",
+    ),
+    (
+        "capabilities",
+        "high",
+        ("device.platform", "device.capability"),
+        "Platform and routing capabilities",
+    ),
+)
+AUDIT_CHECKS = (
+    *GROUPS,
+    ("dmz_cash", "critical", REACHABILITY_RULES, "DMZ to Cash"),
+    ("honeypot", "critical", REACHABILITY_RULES, "Honeypot isolation"),
+)
+REQUIRED_SEVERITIES = {
+    **{check_id: severity for check_id, severity, _, _ in AUDIT_CHECKS},
+    "integrity": "critical",
+    "policy_version": "high",
+    "dataplane": "medium",
+}
 
 
 class Check(Model):
@@ -32,6 +85,13 @@ class Check(Model):
     policy_version: str | None
     timestamp: AwareDatetime
     limitations: str = LIMIT
+
+
+CHECKS = TypeAdapter(list[Check])
+
+
+def findings_hash(checks: list[Check]) -> str:
+    return sha256(CHECKS.dump_json(checks)).hexdigest()
 
 
 class Score(Model):
@@ -60,6 +120,8 @@ class AuditRun(Base):
     snapshot_hash: Mapped[str | None] = mapped_column(String(64))
     policy_version: Mapped[str | None] = mapped_column(String(80))
     policy_hash: Mapped[str | None] = mapped_column(String(64))
+    profile_hash: Mapped[str | None] = mapped_column(String(64))
+    findings_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[str] = mapped_column(String(40))
     score: Mapped[str] = mapped_column(Text)
 
@@ -83,6 +145,8 @@ class Report(Model):
     created_at: AwareDatetime
     score: Score
     findings: list[Check]
+    evidence_status: Literal["valid", "corrupt"] = "valid"
+    profile_hash: str | None = None
     current: bool
 
 
@@ -91,12 +155,38 @@ class Audits:
         self.engine = engine
         self.driver = driver
 
-    def active_policy_hash(self, network_id: UUID) -> str | None:
+    def current_snapshot(self, network_id: UUID) -> NetworkSnapshot | None:
+        try:
+            return self.driver.get_snapshot(network_id)
+        except CorruptSnapshot:
+            return None
+        except NotFound:
+            # An absent revision of a registered network is an integrity failure.
+            self.driver.repository.current_revision(network_id)
+            return None
+
+    def profile_hash(self, network_id: UUID) -> str | None:
         profile = self.driver.profile
         return (
-            hash_model(profile.policy)
+            hash_model(profile)
             if profile and profile.network.id == network_id
             else None
+        )
+
+    @staticmethod
+    def is_current(
+        snapshot: NetworkSnapshot | None,
+        revision: int,
+        snapshot_hash: str | None,
+        saved_profile: str | None,
+        active_profile: str | None,
+    ) -> bool:
+        return (
+            snapshot is not None
+            and snapshot.revision == revision
+            and snapshot.sha256 == snapshot_hash
+            and saved_profile is not None
+            and saved_profile == active_profile
         )
 
     def evaluate(
@@ -130,58 +220,16 @@ class Audits:
                 )
             )
 
-        groups: tuple[tuple[str, Severity, tuple[str, ...], str], ...] = (
-            (
-                "segmentation",
-                "high",
-                ("profile.topology", "firewall.scope"),
-                "Topology and zone membership",
-            ),
-            (
-                "default_deny",
-                "critical",
-                ("firewall.default",),
-                "Default deny and allowlist",
-            ),
-            (
-                "routing",
-                "high",
-                ("routing.policy", "routing.destination"),
-                "Routing policy and one-hop paths",
-            ),
-            (
-                "firewall",
-                "critical",
-                (
-                    "firewall.scope",
-                    "firewall.isolation",
-                    "firewall.default",
-                    "traffic.path",
-                ),
-                "Firewall rule scope and modeled reachability",
-            ),
-            (
-                "capabilities",
-                "high",
-                ("device.platform", "device.capability"),
-                "Platform and routing capabilities",
-            ),
-        )
-        audit_checks = (
-            *groups,
-            ("dmz_cash", "critical", (), "DMZ to Cash"),
-            ("honeypot", "critical", (), "Honeypot isolation"),
-        )
         try:
             saved = self.driver.get_snapshot(network_id, revision)
-        except CorruptSnapshot:
+        except (CorruptSnapshot, NotFound):
             add(
                 "integrity",
                 "fail",
                 "critical",
                 "Stored snapshot failed integrity validation.",
             )
-            for check_id, severity, _, title in audit_checks:
+            for check_id, severity, _, title in AUDIT_CHECKS:
                 add(
                     check_id,
                     "unknown",
@@ -213,7 +261,7 @@ class Audits:
                 return "unknown"
             return "pass"
 
-        for check_id, severity, rules, title in groups:
+        for check_id, severity, rules, title in GROUPS:
             matched = [item for item in results if item.rule_id in rules]
             evidence = tuple(
                 f"{item.rule_id}: {', '.join(item.evidence)}" for item in matched[:50]
@@ -229,7 +277,7 @@ class Audits:
                     if matched
                     else "Evaluated against the stored revision and active profile."
                 ),
-                evidence,
+                evidence or (saved.sha256,),
             )
         dmz = {z.id for z in network.zones if "dmz" in z.name.casefold()}
         cash = {
@@ -238,6 +286,7 @@ class Audits:
             if any(word in z.name.casefold() for word in ("cash", "payment"))
         }
         decoy = {z.id for z in network.zones if "honeypot" in z.name.casefold()}
+        reachability = [item for item in results if item.rule_id in REACHABILITY_RULES]
         for check_id, sources, targets in (
             ("dmz_cash", dmz, cash),
             ("honeypot", decoy, {z.id for z in network.zones} - decoy),
@@ -271,10 +320,12 @@ class Audits:
             else:
                 add(
                     check_id,
-                    status_for([]),
+                    status_for(reachability),
                     "critical",
-                    "No modeled allow crosses the isolated direction.",
-                    tuple(str(zone) for zone in sorted(sources | targets)),
+                    " ".join(dict.fromkeys(f.reason for f in reachability))
+                    or "No modeled allow crosses the isolated direction.",
+                    tuple(str(zone) for zone in sorted(sources | targets))
+                    + tuple(dict.fromkeys(f.rule_id for f in reachability)),
                 )
         saved_version = self.driver.repository.revision_info(
             network_id, revision
@@ -299,35 +350,31 @@ class Audits:
     def run(self, network_id: UUID, actor: str, request_id: str) -> Report:
         revision = self.driver.repository.current_revision(network_id)
         snapshot_hash, checks = self.evaluate(network_id, revision)
-        report = Report(
-            id=uuid4(),
-            network_id=network_id,
-            revision=revision,
-            snapshot_hash=snapshot_hash,
-            findings=checks,
-            policy_version=checks[0].policy_version,
-            created_at=checks[0].timestamp,
-            policy_hash=self.active_policy_hash(network_id),
-            score=score(checks),
-            current=self.driver.repository.current_revision(network_id) == revision,
-        )
+        profile = self.driver.profile
+        profile_hash = self.profile_hash(network_id)
+        report_id = uuid4()
+        policy_version = checks[0].policy_version
         with Session(self.engine) as session, session.begin():
             session.add(
                 AuditRun(
-                    id=str(report.id),
+                    id=str(report_id),
                     network_id=str(network_id),
                     revision=revision,
                     snapshot_hash=snapshot_hash,
-                    policy_version=report.policy_version,
-                    policy_hash=report.policy_hash,
-                    created_at=report.created_at.isoformat(),
-                    score=report.score.model_dump_json(),
+                    policy_version=policy_version,
+                    policy_hash=hash_model(profile.policy)
+                    if profile_hash and profile
+                    else None,
+                    profile_hash=profile_hash,
+                    findings_hash=findings_hash(checks),
+                    created_at=checks[0].timestamp.isoformat(),
+                    score=score(checks).model_dump_json(),
                 )
             )
             session.flush()
             session.add_all(
                 AuditFinding(
-                    run_id=str(report.id), position=i, payload=item.model_dump_json()
+                    run_id=str(report_id), position=i, payload=item.model_dump_json()
                 )
                 for i, item in enumerate(checks)
             )
@@ -339,17 +386,14 @@ class Audits:
                     event_type="security.audit",
                     network_id=network_id,
                     revision=revision,
-                    policy_version=report.policy_version,
+                    policy_version=policy_version,
                 )
             )
-        return report
+        return self.read(network_id, report_id)[0]
 
     def read(self, network_id: UUID, report_id: UUID | None = None) -> list[Report]:
-        try:
-            snapshot = self.driver.get_snapshot(network_id)
-        except CorruptSnapshot:
-            snapshot = None
-        policy = self.active_policy_hash(network_id)
+        snapshot = self.current_snapshot(network_id)
+        profile_hash = self.profile_hash(network_id)
         with Session(self.engine) as session:
             query = select(AuditRun).where(AuditRun.network_id == str(network_id))
             if report_id is not None:
@@ -357,31 +401,64 @@ class Audits:
             runs = session.scalars(
                 query.order_by(AuditRun.created_at.desc(), AuditRun.id.desc()).limit(10)
             )
-            timestamps = TypeAdapter(AwareDatetime)
             return [
-                Report(
-                    id=UUID(run.id),
-                    network_id=network_id,
-                    revision=run.revision,
-                    snapshot_hash=run.snapshot_hash,
-                    policy_version=run.policy_version,
-                    policy_hash=run.policy_hash,
-                    created_at=timestamps.validate_python(run.created_at),
-                    score=Score.model_validate_json(run.score),
-                    current=(
-                        snapshot is not None
-                        and snapshot.revision == run.revision
-                        and snapshot.sha256 == run.snapshot_hash
-                        and policy == run.policy_hash
-                    ),
-                    findings=[
-                        Check.model_validate_json(item)
-                        for item in session.scalars(
-                            select(AuditFinding.payload)
-                            .where(AuditFinding.run_id == run.id)
-                            .order_by(AuditFinding.position)
-                        )
-                    ],
-                )
-                for run in runs
+                self.saved_report(session, run, snapshot, profile_hash) for run in runs
             ]
+
+    def saved_report(
+        self,
+        session: Session,
+        run: AuditRun,
+        snapshot: NetworkSnapshot | None,
+        active_profile: str | None,
+    ) -> Report:
+        network_id = UUID(run.network_id)
+        created_at = TypeAdapter(AwareDatetime).validate_python(run.created_at)
+        payloads = session.scalars(
+            select(AuditFinding.payload)
+            .where(AuditFinding.run_id == run.id)
+            .order_by(AuditFinding.position)
+        )
+        try:
+            findings = [Check.model_validate_json(payload) for payload in payloads]
+            computed = score(findings)
+            valid = (
+                len(findings) == len(REQUIRED_SEVERITIES)
+                and {f.check_id: f.severity for f in findings} == REQUIRED_SEVERITIES
+                and all(
+                    f.scope == network_id
+                    and f.network_revision == run.revision
+                    and f.policy_version == run.policy_version
+                    and f.timestamp == created_at
+                    for f in findings
+                )
+                and computed == Score.model_validate_json(run.score, strict=True)
+                and (
+                    findings_hash(findings) == run.findings_hash
+                    or run.findings_hash is None
+                    and run.profile_hash is None
+                )
+            )
+        except ValidationError:
+            valid = False
+        return Report(
+            id=UUID(run.id),
+            network_id=network_id,
+            revision=run.revision,
+            snapshot_hash=run.snapshot_hash,
+            policy_version=run.policy_version,
+            policy_hash=run.policy_hash,
+            profile_hash=run.profile_hash,
+            created_at=created_at,
+            findings=findings if valid else [],
+            evidence_status="valid" if valid else "corrupt",
+            score=computed if valid else Score(value=None, coverage=0),
+            current=valid
+            and self.is_current(
+                snapshot,
+                run.revision,
+                run.snapshot_hash,
+                run.profile_hash,
+                active_profile,
+            ),
+        )
