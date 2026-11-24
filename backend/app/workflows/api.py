@@ -13,6 +13,7 @@ from app.workflows.models import (
     Plan,
     Requirements,
     TaskRequest,
+    TaskSummary,
     TaskView,
     WorkflowError,
 )
@@ -26,6 +27,10 @@ def workflow_router(settings: Settings, runtime: Runtime) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["workflows"], responses=errors)
     use = Depends(authorizer(settings, Permission.USE_WORKFLOWS))
     approve = Depends(authorizer(settings, Permission.APPROVE_WORKFLOW))
+
+    @router.get("/tasks", dependencies=[use])
+    def tasks(request: Request) -> list[TaskSummary]:
+        return runtime.store.summaries(request.state.actor)
 
     @router.post("/tasks", dependencies=[use], status_code=201)
     def create(body: TaskRequest, request: Request) -> TaskView:

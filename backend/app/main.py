@@ -10,12 +10,17 @@ from alembic.script import ScriptDirectory
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import contracts
 from app.config import Settings
+from app.dashboard.api import security_router
+from app.dashboard.audit import Audits
+from app.dashboard.honeypot import Honeypot
+from app.dashboard.web import ROOT, web_router
 from app.network.api import NetworkErrorResponse, failure, network_router
 from app.network.driver import MockNetworkDriver
 from app.network.errors import NetworkError, PolicyBlocked
@@ -39,6 +44,9 @@ ERRORS = {
     401: ("unauthenticated", "Authentication required"),
     403: ("forbidden", "Permission denied"),
     404: ("not_found", "Resource not found"),
+    408: ("timeout", "Request timed out"),
+    413: ("payload_too_large", "Request exceeds the size limit"),
+    429: ("rate_limited", "Request rate exceeded"),
     405: ("method_not_allowed", "Method not allowed"),
     422: ("invalid_request", "Request validation failed"),
     500: ("internal_error", "Internal server error"),
@@ -96,6 +104,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
     )
 
+    app.state.engine = storage.engine
+
     @app.middleware("http")
     async def request_context(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -134,6 +144,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         )
         response.headers["X-Request-ID"] = request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+        )
+        if not request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.exception_handler(StarletteHTTPException)
@@ -259,7 +278,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def openapi() -> JSONResponse:
         return JSONResponse(app.openapi())
 
+    app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+    app.include_router(web_router(settings, storage.engine, storage))
     app.include_router(api)
+    app.include_router(
+        security_router(
+            settings,
+            Audits(storage.engine, driver),
+            Honeypot(
+                storage.engine,
+                driver,
+                settings.honeypot_secret.get_secret_value()
+                if settings.honeypot_secret
+                else None,
+            ),
+        )
+    )
     app.include_router(network_router(settings, driver))
     app.include_router(workflow_router(settings, workflows))
     return app

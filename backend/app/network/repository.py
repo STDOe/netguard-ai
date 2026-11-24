@@ -171,6 +171,20 @@ class NetworkRepository:
                 raise NotFound
             return deserialize(record)
 
+    def current_revision(self, network_id: UUID) -> int:
+        with Session(self.engine) as session:
+            record = session.get(NetworkRecord, str(network_id))
+            if record is None:
+                raise NotFound
+            return record.current_revision
+
+    def revision_info(self, network_id: UUID, revision: int) -> RevisionInfo:
+        with Session(self.engine) as session:
+            record = session.get(RevisionRecord, (str(network_id), revision))
+            if record is None:
+                raise NotFound
+            return RevisionInfo.model_validate(record, from_attributes=True)
+
     def history(
         self, network_id: UUID, limit: int, before_revision: int | None
     ) -> list[RevisionInfo]:

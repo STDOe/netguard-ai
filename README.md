@@ -1,6 +1,6 @@
 # NetGuard AI
 
-NetGuard AI is a network design and security application with a standalone backend and a future AI Workforce OS integration. The current stage is **Agent Workflows (v0.1)** with a persistent mock network. The backend reports `demo_mode: true`. Workflows run offline by default and operate on mock networks.
+NetGuard AI is a network design and security application with a standalone backend and a future AI Workforce OS integration. The current stage is **Dashboard, Security Audit and Honeypot Demo (v0.1)** with a persistent mock network. The backend reports `demo_mode: true`. Workflows run offline by default and operate on mock networks.
 
 ## Local development
 
@@ -120,6 +120,13 @@ See [workflow API, states, offline sourcing and LiteLLM configuration](docs/work
 and the [checkpoint and approval ADR](docs/architecture/0004-agent-checkpoints-and-approvals.md).
 The SQLite application database and its adjacent checkpoint database share the Compose
 volume. Keep both when migrating or backing up a deployment.
+
+## Standalone web console
+
+After local startup or `docker compose up --build --wait`, open
+`http://127.0.0.1:8000/` and sign in with your Viewer or Admin installation token.
+The console connects to the same mock network, workflows and role checks as the REST API.
+See [dashboard access, audit scoring and the optional OpenCanary demo](docs/dashboard-security.md).
 
 ## Verification
 

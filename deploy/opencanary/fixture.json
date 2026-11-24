@@ -1,0 +1,7 @@
+{
+  "node_id": "offline-fixture",
+  "logtype": 3000,
+  "src_host": "192.0.2.17",
+  "dst_host": "10.30.99.2",
+  "dst_port": 8080
+}

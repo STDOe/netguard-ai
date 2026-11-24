@@ -5,6 +5,7 @@ from alembic import context
 from sqlalchemy import Connection
 
 from app.config import DatabaseSettings
+from app.dashboard import audit, honeypot, sessions  # noqa: F401
 from app.network import repository as _repository  # noqa: F401
 from app.storage import Base, sqlite_engine
 from app.workflows import store as _workflows  # noqa: F401

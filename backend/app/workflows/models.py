@@ -200,6 +200,12 @@ class ExecutionResult(Model):
     mock: Literal[True] = True
 
 
+class TaskSummary(Model):
+    id: UUID
+    kind: str
+    status: str
+
+
 class TaskView(Model):
     id: UUID
     thread_id: UUID

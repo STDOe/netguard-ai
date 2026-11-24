@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block scripts %}
+<script defer src="/static/vendor/htmx-2.0.11.min.js"></script>
+<script defer src="/static/vendor/cytoscape-3.33.1.min.js"></script>
+<script type="module" src="/static/dashboard.js"></script>
+{% endblock %}
+{% block body %}
+<a class="skip" href="#main">Skip to content</a>
+<div class="app-shell" data-page="{{ page }}" data-can-change="{{ can_change|lower }}" data-can-approve="{{ can_approve|lower }}">
+  <aside class="sidebar">
+    <a class="wordmark" href="/dashboard/overview"><span class="brand-mark" aria-hidden="true">◇</span><span>NetGuard <strong>AI</strong><small>STANDALONE</small></span></a>
+    <nav aria-label="Main navigation">
+      {% for key, (text, icon) in nav.items() %}
+      <a href="/dashboard/{{ key }}"{% if page == key %} aria-current="page"{% endif %}><span aria-hidden="true">{{ icon }}</span>{{ text }}</a>
+      {% endfor %}
+    </nav>
+    <div class="sidebar-footer"><span class="status-dot"></span> Virtual network only</div>
+  </aside>
+  <div class="main-area">
+    <header class="toolbar">
+      <span class="environment"><span class="status-dot"></span> Local workspace</span>
+      <div class="flex items-center gap-3"><span class="demo">DEMO MODE</span><span class="role">{{ role|capitalize }}</span><button id="logout" class="quiet">Sign out</button></div>
+    </header>
+    <main id="main">
+      <div class="page-header"><div><h1>{{ title }}</h1>
+      <p class="muted">
+      {% if page == 'overview' %}Virtual network posture, approvals and recent activity.
+      {% elif page == 'topology' %}Inspect the devices and segments in the stored mock revision.
+      {% elif page == 'workspace' %}Run a structured Brownfield planning task.
+      {% elif page == 'greenfield' %}Collect requirements and produce a logical design.
+      {% elif page == 'approvals' %}Review immutable plans and their execution status.
+      {% elif page == 'audit' %}Review saved findings and the coverage of each audit.
+      {% elif page == 'honeypot' %}Authenticated sensor observations and their inventory correlation.
+      {% else %}Workflow history and completed security operations.{% endif %}
+      </p></div>
+      {% if page in ('overview','topology','workspace','approvals','audit') %}
+      <label class="network-picker" for="network">Network<select id="network"><option>Loading…</option></select></label>
+      {% endif %}
+      </div>
+      <p id="status" class="notice" role="status" hidden></p>
+      {% if page in ('overview','topology') %}
+      {% include "network.html" %}
+      {% elif page in ('workspace','greenfield','approvals') %}
+      {% include "workflow.html" %}
+      {% elif page == 'audit' %}
+      <section class="panel"><div class="panel-heading"><h2>Saved reports</h2>{% if can_audit %}<button id="run-audit" class="primary">Run audit</button>{% endif %}</div>
+      <div id="audit-list"></div></section><section id="audit-detail" class="panel" hidden></section>
+      {% elif page == 'honeypot' %}
+      <section class="panel"><div class="panel-heading"><h2>Sensor events</h2><button id="refresh-events">Refresh</button></div>
+      <p class="muted section-note">An event is an observation. Inventory matching is limited to an exact known destination interface.</p><div id="honeypot-list"></div></section>
+      {% else %}
+      <section class="panel"><div class="panel-heading"><h2>Workflow history</h2></div><div id="task-list"></div></section>
+      {% endif %}
+      {% if page in ('overview','activity') %}
+      <section class="panel"><div class="panel-heading"><h2>Recent activity</h2><button hx-get="/dashboard-fragments/activity" hx-target="#activity" hx-swap="innerHTML">Refresh</button></div><div id="activity" hx-get="/dashboard-fragments/activity" hx-trigger="load">Loading activity…</div></section>
+      {% endif %}
+    </main>
+  </div>
+</div>
+{% endblock %}
