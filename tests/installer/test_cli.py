@@ -180,15 +180,18 @@ class Installer:
             )
             if acl_error:
                 diagnostics.append(acl_error.group(0))
+            if acl_error:
+                stage = acl_error.group(1).replace(" ", "-")
+                kind = acl_error.group(2)
+                with Path(os.environ["GITHUB_OUTPUT"]).open(
+                    "a", encoding="utf-8"
+                ) as output:
+                    output.write(f"config_stage={stage}\nconfig_error={kind}\n")
             for diagnostic in diagnostics:
                 print(
                     f"\n::warning title=Windows installer diagnostic::{diagnostic}",
                     flush=True,
                 )
-                with Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
-                    "a", encoding="utf-8"
-                ) as summary:
-                    summary.write(f"- {action}: {diagnostic}\n")
         return result
 
     def calls(self) -> list[list[str]]:
@@ -282,6 +285,49 @@ def test_install_lifecycle_and_redaction(installer: Installer) -> None:
     assert all(
         not {"down", "--volumes", "rm", "prune"}.intersection(call) for call in calls
     )
+
+
+@pytest.mark.skipif(not WINDOWS, reason="Requires Windows NTFS ACL APIs")
+def test_windows_private_config_acl(installer: Installer) -> None:
+    expect(installer.run("install"), True, "For first sign-in")
+    before = installer.env_file.read_bytes()
+    assert installer.runner
+    result = subprocess.run(
+        [
+            installer.runner,
+            "-NoProfile",
+            "-Command",
+            """
+            $ErrorActionPreference = 'Stop'
+            $file = $env:INSTALLER_TEST_ENV_FILE
+            $id = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $acl = Get-Acl -LiteralPath $file
+            $sid = [Security.Principal.SecurityIdentifier]
+            $allow = @($acl.GetAccessRules($true, $true, $sid) |
+                Where-Object { $_.AccessControlType -eq 'Allow' } |
+                ForEach-Object { $_.IdentityReference.Value } |
+                Sort-Object -Unique)
+            if (-not $acl.AreAccessRulesProtected -or
+                $acl.GetOwner($sid).Value -ne $id -or $allow.Count -ne 2 -or
+                $allow -notcontains $id -or $allow -notcontains 'S-1-5-18') {
+                throw 'Unexpected .env owner or ACL'
+            }
+            $everyone = [Security.Principal.SecurityIdentifier]::new('S-1-1-0')
+            $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+                $everyone, 'Read', 'Allow'
+            )
+            $acl.AddAccessRule($rule)
+            Set-Acl -LiteralPath $file -AclObject $acl
+            """,
+        ],
+        env=dict(os.environ, INSTALLER_TEST_ENV_FILE=str(installer.env_file)),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    expect(installer.run("install"), False, "Restrict .env access")
+    assert installer.env_file.read_bytes() == before
 
 
 def test_invalid_config_preserved(installer: Installer) -> None:
