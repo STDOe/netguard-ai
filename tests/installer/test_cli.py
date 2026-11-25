@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -168,18 +169,26 @@ class Installer:
         )
 
         if WINDOWS and os.environ.get("GITHUB_ACTIONS") == "true":
+            diagnostics = []
             reason = self.state.with_suffix(".reason")
             if reason.exists():
-                print(
-                    "::warning title=Docker fixture diagnostic::" + reason.read_text()
-                )
+                diagnostics.append(reason.read_text())
                 reason.unlink()
-            if result.stderr.startswith(
-                "Error: Could not create a private .env during "
-            ):
+            acl_error = re.search(
+                r"Could not create a private \.env during ([a-z ]+) \(([A-Za-z]+)\)",
+                result.stderr,
+            )
+            if acl_error:
+                diagnostics.append(acl_error.group(0))
+            for diagnostic in diagnostics:
                 print(
-                    "::warning title=Installer ACL diagnostic::" + result.stderr.strip()
+                    f"\n::warning title=Windows installer diagnostic::{diagnostic}",
+                    flush=True,
                 )
+                with Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
+                    "a", encoding="utf-8"
+                ) as summary:
+                    summary.write(f"- {action}: {diagnostic}\n")
         return result
 
     def calls(self) -> list[list[str]]:

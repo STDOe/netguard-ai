@@ -95,6 +95,7 @@ function New-Config {
             )
             $acl.AddAccessRule($rule)
         }
+        $stage = 'apply staging directory ACL'
         Set-Acl -LiteralPath $staging -AclObject $acl
         $stage = 'generate tokens'
         $tokens = @{
@@ -119,6 +120,7 @@ function New-Config {
         $fileAcl = Get-Acl -LiteralPath $privateFile
         $fileAcl.SetOwner($user)
         $fileAcl.SetAccessRuleProtection($true, $true)
+        $stage = 'apply staged file ACL'
         Set-Acl -LiteralPath $privateFile -AclObject $fileAcl
         $stage = 'move staged configuration'
         [IO.File]::Move($privateFile, $envFile)
@@ -217,7 +219,8 @@ try {
     foreach ($item in Get-ChildItem Env:) {
         if ($item.Name -match '^(NETGUARD_|COMPOSE_)') {
             $inherited[$item.Name] = $item.Value
-            [Environment]::SetEnvironmentVariable($item.Name, $null, 'Process')
+            # Modern .NET can preserve an empty value after PowerShell marshals $null.
+            Remove-Item -LiteralPath ('Env:' + $item.Name)
         }
     }
     $docker = (Get-Command docker -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
