@@ -90,6 +90,7 @@ jobs:
   installer-windows:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         shell: [powershell, pwsh]
     env:
@@ -100,4 +101,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install pytest
-      - run: python -m pytest -q --confcutdir=tests/installer tests/installer
+      - run: python -m pytest -q -s --confcutdir=tests/installer tests/installer

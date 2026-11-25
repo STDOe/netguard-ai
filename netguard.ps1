@@ -81,8 +81,10 @@ function New-Token {
 
 function New-Config {
     $staging = Join-Path $root ('.env.' + [Guid]::NewGuid().ToString('N'))
-    [void][IO.Directory]::CreateDirectory($staging)
+    $stage = 'create staging directory'
     try {
+        [void][IO.Directory]::CreateDirectory($staging)
+        $stage = 'protect staging directory ACL'
         # No secrets are written until the staging directory has a private ACL.
         $acl = New-Object Security.AccessControl.DirectorySecurity
         $acl.SetOwner($user)
@@ -94,6 +96,7 @@ function New-Config {
             $acl.AddAccessRule($rule)
         }
         Set-Acl -LiteralPath $staging -AclObject $acl
+        $stage = 'generate tokens'
         $tokens = @{
             NETGUARD_ADMIN_TOKEN = New-Token
             NETGUARD_VIEWER_TOKEN = New-Token
@@ -102,22 +105,29 @@ function New-Config {
         if (@($tokens.Values | Sort-Object -Unique).Count -ne 3) {
             throw 'Could not generate independent installation tokens.'
         }
+        $stage = 'read configuration template'
         $content = foreach ($line in [IO.File]::ReadAllLines($template)) {
             if ($line -cmatch '^(NETGUARD_(ADMIN_TOKEN|VIEWER_TOKEN|HONEYPOT_SECRET))=$') {
                 $Matches[1] + '=' + $tokens[$Matches[1]]
             } else { $line }
         }
         $privateFile = Join-Path $staging 'config'
+        $stage = 'write staged configuration'
         [IO.File]::WriteAllLines($privateFile, [string[]]$content, [Text.UTF8Encoding]::new($false))
         # Protect the ACL explicitly so the file retains it when moved.
+        $stage = 'protect staged file ACL'
         $fileAcl = Get-Acl -LiteralPath $privateFile
         $fileAcl.SetOwner($user)
         $fileAcl.SetAccessRuleProtection($true, $true)
         Set-Acl -LiteralPath $privateFile -AclObject $fileAcl
+        $stage = 'move staged configuration'
         [IO.File]::Move($privateFile, $envFile)
     } catch {
-        throw 'Could not create a private .env. Use a writable NTFS directory or retry if another installer ran.'
-    } finally { [IO.Directory]::Delete($staging, $true) }
+        $kind = $_.Exception.GetBaseException().GetType().Name
+        throw "Could not create a private .env during ${stage} (${kind}). Use a writable NTFS directory or retry if another installer ran."
+    } finally {
+        if ([IO.Directory]::Exists($staging)) { [IO.Directory]::Delete($staging, $true) }
+    }
 }
 
 function Test-OwnPort {

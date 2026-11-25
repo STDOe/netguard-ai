@@ -51,9 +51,15 @@ elif args[:2] == ["image", "inspect"]:
     sys.exit(0 if state.get("image") else 1)
 elif args[0] == "compose":
     root, config, compose_file = (Path(args[i]) for i in (2, 4, 6))
-    assert root.name == "checkout with spaces"
-    assert config == root / ".env" and compose_file == root / "docker-compose.yml"
-    assert not any(key.startswith(("NETGUARD_", "COMPOSE_")) for key in os.environ)
+    if root.name != "checkout with spaces":
+        state_file.with_suffix(".reason").write_text("fixture-project-argument")
+        sys.exit(2)
+    if config != root / ".env" or compose_file != root / "docker-compose.yml":
+        state_file.with_suffix(".reason").write_text("fixture-file-arguments")
+        sys.exit(2)
+    if any(key.startswith(("NETGUARD_", "COMPOSE_")) for key in os.environ):
+        state_file.with_suffix(".reason").write_text("fixture-inherited-settings")
+        sys.exit(2)
     command, *options = args[7:]
     port = 8000
     if config.exists():
@@ -152,7 +158,7 @@ class Installer:
         env.pop("DOCKER_CONTEXT", None)
         env["NETGUARD_DEMO_MODE"] = "false"
         env["COMPOSE_PROJECT_NAME"] = "unrelated"
-        return subprocess.run(
+        result = subprocess.run(
             [*self.command, action],
             cwd=self.directory.parent,
             env=env,
@@ -160,6 +166,21 @@ class Installer:
             text=True,
             timeout=50,
         )
+
+        if WINDOWS and os.environ.get("GITHUB_ACTIONS") == "true":
+            reason = self.state.with_suffix(".reason")
+            if reason.exists():
+                print(
+                    "::warning title=Docker fixture diagnostic::" + reason.read_text()
+                )
+                reason.unlink()
+            if result.stderr.startswith(
+                "Error: Could not create a private .env during "
+            ):
+                print(
+                    "::warning title=Installer ACL diagnostic::" + result.stderr.strip()
+                )
+        return result
 
     def calls(self) -> list[list[str]]:
         return [
