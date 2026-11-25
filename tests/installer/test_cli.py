@@ -312,12 +312,8 @@ def test_windows_private_config_acl(installer: Installer) -> None:
                 $allow -notcontains $id -or $allow -notcontains 'S-1-5-18') {
                 throw 'Unexpected .env owner or ACL'
             }
-            $everyone = [Security.Principal.SecurityIdentifier]::new('S-1-1-0')
-            $rule = [Security.AccessControl.FileSystemAccessRule]::new(
-                $everyone, 'Read', 'Allow'
-            )
-            $acl.AddAccessRule($rule)
-            Set-Acl -LiteralPath $file -AclObject $acl
+            & icacls.exe $file /grant '*S-1-1-0:R' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not add the test ACL rule' }
             """,
         ],
         env=dict(os.environ, INSTALLER_TEST_ENV_FILE=str(installer.env_file)),

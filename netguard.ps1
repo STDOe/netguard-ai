@@ -79,11 +79,21 @@ function New-Token {
     } finally { $rng.Dispose() }
 }
 
+# Windows PowerShell's Set-Acl fails when applying the constructed descriptor.
+# The .NET Framework APIs persist only the sections modified on that descriptor.
+function Set-ConfigAcl($item, $security) {
+    if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        $item.SetAccessControl($security)
+    } else {
+        Set-Acl -LiteralPath $item.FullName -AclObject $security
+    }
+}
+
 function New-Config {
     $staging = Join-Path $root ('.env.' + [Guid]::NewGuid().ToString('N'))
     $stage = 'create staging directory'
     try {
-        [void][IO.Directory]::CreateDirectory($staging)
+        $stagingDirectory = [IO.Directory]::CreateDirectory($staging)
         $stage = 'protect staging directory ACL'
         # No secrets are written until the staging directory has a private ACL.
         $acl = New-Object Security.AccessControl.DirectorySecurity
@@ -96,7 +106,7 @@ function New-Config {
             $acl.AddAccessRule($rule)
         }
         $stage = 'apply staging directory ACL'
-        Set-Acl -LiteralPath $staging -AclObject $acl
+        Set-ConfigAcl $stagingDirectory $acl
         $stage = 'generate tokens'
         $tokens = @{
             NETGUARD_ADMIN_TOKEN = New-Token
@@ -121,7 +131,7 @@ function New-Config {
         $fileAcl.SetOwner($user)
         $fileAcl.SetAccessRuleProtection($true, $true)
         $stage = 'apply staged file ACL'
-        Set-Acl -LiteralPath $privateFile -AclObject $fileAcl
+        Set-ConfigAcl ([IO.FileInfo]::new($privateFile)) $fileAcl
         $stage = 'move staged configuration'
         [IO.File]::Move($privateFile, $envFile)
     } catch {
