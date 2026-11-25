@@ -83,3 +83,21 @@ jobs:
           export NETGUARD_INTEGRATION_ENABLED NETGUARD_INTEGRATION_TOKEN_SHA256 NETGUARD_INTEGRATION_EXPIRES_AT NETGUARD_INTEGRATION_SCOPES
           docker compose up --no-build --wait --wait-timeout 60
           docker compose exec -T -e NETGUARD_WORKFORCE_TOKEN netguard-app python - < deploy/workforce/client.py
+
+      - name: Linux installer lifecycle and SQLite persistence
+        run: bash tests/installer/smoke.sh
+
+  installer-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        shell: [powershell, pwsh]
+    env:
+      INSTALLER_POWERSHELL: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest
+      - run: python -m pytest -q --confcutdir=tests/installer tests/installer

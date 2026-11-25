@@ -1,7 +1,19 @@
 # NetGuard AI
 
-NetGuard AI is a network design and security application with a standalone backend and an optional Workforce Integration Contract. The current stage is **v0.1.0 release candidate** with a persistent mock network. The backend reports `demo_mode: true`. Workflows run offline by default and operate on mock networks.
+NetGuard AI is a network design and security application with a standalone backend and an optional Workforce Integration Contract. The stable v0.1.0 release provides a persistent mock network. The v0.1.1 installer runs NetGuard locally through Docker. The backend reports `demo_mode: true`. Workflows run offline by default and operate on mock networks.
 
+
+## Install with Docker
+
+From the source checkout, run the installer for your system:
+
+- **Windows (Docker Desktop with Linux containers)** — `.\netguard.ps1 install`
+- **Linux (Docker Engine and Compose v2)** — `./netguard.sh install`
+
+Open the loopback Dashboard URL printed on success and sign in using the
+Admin token from your private `.env`. The installer generates distinct local
+credentials, starts Docker Compose and waits for API readiness.
+[Installer quickstart, commands and troubleshooting](docs/easy-install.md)
 
 [Clean install](docs/quickstart-v0.1.md) · [Integration Contract v1](docs/integration-v1.md) · [Deployment security and recovery](docs/deployment-security.md) · [Release notes and acceptance](docs/release-v0.1.0.md)
 
