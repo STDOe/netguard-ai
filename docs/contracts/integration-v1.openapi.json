@@ -1379,6 +1379,39 @@
         "title": "Submission",
         "type": "object"
       },
+      "TaskReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "correlation_id": {
+            "format": "uuid",
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1.0",
+            "default": "1.0",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "task_id": {
+            "format": "uuid",
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "task_id",
+          "correlation_id"
+        ],
+        "title": "TaskReceipt",
+        "type": "object"
+      },
       "TaskResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2107,7 +2140,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TaskResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TaskReceipt"
+                    }
+                  ],
+                  "title": "Response Create Task Api V1 Integration Tasks Post"
                 }
               }
             },
@@ -2403,7 +2444,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TaskResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TaskReceipt"
+                    }
+                  ],
+                  "title": "Response Cancel Api V1 Integration Tasks  Task Id  Cancel Post"
                 }
               }
             },
@@ -2738,7 +2787,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TaskResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TaskReceipt"
+                    }
+                  ],
+                  "title": "Response Supply Input Api V1 Integration Tasks  Task Id  Input Post"
                 }
               }
             },

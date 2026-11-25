@@ -9,9 +9,8 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import TypeAdapter
-from sqlalchemy import ForeignKey, String, false, update
-from sqlalchemy.dialects.sqlite import insert
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy import false, select, update
+from sqlalchemy.orm import Session
 
 from app.config import IntegrationName, Scope
 from app.contracts import ErrorResponse
@@ -25,20 +24,22 @@ from app.integration.models import (
     IntegrationEvent,
     PlanSummary,
     Submission,
+    TaskReceipt,
     TaskResponse,
     artifact_link,
 )
-from app.storage import Base, Task
+from app.storage import Task
 from app.workflows.models import (
     AuditRequest,
     BrownfieldRequest,
     Plan,
     Requirements,
     Status,
+    TaskView,
     WorkflowError,
 )
 from app.workflows.runtime import Runtime
-from app.workflows.store import WorkflowRecord
+from app.workflows.store import ArtifactRecord, WorkflowRecord
 
 PREFIX = "/api/v1/integration"
 Workspace = Annotated[IntegrationName, Query()]
@@ -46,18 +47,12 @@ BODY_LIMIT = 16_384
 TASK_STATUS = TypeAdapter(Status)
 
 
-class ArtifactRecord(Base):
-    __tablename__ = "integration_artifacts"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    task_id: Mapped[str] = mapped_column(ForeignKey("workflow_metadata.task_id"))
-    name: Mapped[str] = mapped_column(String(32))
-
-
 class BoundedRoute(APIRoute):
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         handle = super().get_route_handler()
 
         async def bounded(request: Request) -> Response:
+            request.app.state.integration_auth.admit()
             if request.method != "POST":
                 return await handle(request)
             body = bytearray()
@@ -105,53 +100,40 @@ class IntegrationTasks:
     def scoped(self, task_id: UUID) -> WorkflowRecord:
         return self.runtime.store.scoped(task_id, self.auth.owner, self.auth.workspace)
 
-    def project(self, request: Request, task_id: UUID) -> TaskResponse:
-        row = self.scoped(task_id)
-        request_id = UUID(request.state.request_id)
-        if row.payload_kind == "audit":
-            audit = AuditRequest.model_validate_json(row.payload)
-            self.advance_audit(row, audit, request_id)
-            reports = self.audits.read(audit.network_id, task_id)
-            status = TASK_STATUS.validate_python(self.runtime.store.status(row.task_id))
-            if status == "succeeded" and not reports:
-                status = "recovery_required"
-            return TaskResponse(
-                request_id=request_id,
-                task_id=task_id,
-                workspace_id=self.auth.workspace,
-                correlation_id=UUID(row.correlation_id),
-                kind="audit",
-                status=status,
-                code="audit_report_missing" if status == "recovery_required" else None,
-                audit=reports[0] if reports else None,
-            )
-        return self.workflow_view(request, row, task_id)
+    def audit_view(
+        self, request: Request, row: WorkflowRecord, audit: AuditRequest
+    ) -> TaskResponse:
+        task_id = UUID(row.task_id)
+        status = TASK_STATUS.validate_python(self.runtime.store.status(row.task_id))
+        reports = (
+            self.audits.read(audit.network_id, task_id) if status == "succeeded" else []
+        )
+        code = None
+        if status == "queued" and audit.network_id != self.network_id:
+            code = "audit_profile_unavailable"
+        elif status == "succeeded" and not reports:
+            status = "recovery_required"
+            code = "audit_report_missing"
+        return TaskResponse(
+            request_id=UUID(request.state.request_id),
+            task_id=task_id,
+            workspace_id=self.auth.workspace,
+            correlation_id=UUID(row.correlation_id),
+            kind="audit",
+            status=status,
+            code=code,
+            audit=reports[0] if reports else None,
+        )
 
     def workflow_view(
-        self, request: Request, row: WorkflowRecord, task_id: UUID
+        self, request: Request, row: WorkflowRecord, task: TaskView
     ) -> TaskResponse:
-        task = self.runtime.get(task_id, self.auth.owner)
-        has_artifacts = Scope.ARTIFACTS in self.auth.settings.integration_scopes
+        task_id = task.id
         links = (
             tuple(artifact_link(task_id, item) for item in task.artifacts)
-            if has_artifacts
+            if Scope.ARTIFACTS in self.auth.settings.integration_scopes
             else ()
         )
-        if links:
-            with Session(self.auth.storage.engine) as session, session.begin():
-                session.execute(
-                    insert(ArtifactRecord).on_conflict_do_nothing(
-                        index_elements=[ArtifactRecord.id]
-                    ),
-                    [
-                        dict(
-                            id=str(link.artifact_id),
-                            task_id=str(task_id),
-                            name=link.name,
-                        )
-                        for link in links
-                    ],
-                )
         awaiting_human = (
             task.kind == "brownfield"
             and task.plan is not None
@@ -175,30 +157,47 @@ class IntegrationTasks:
             artifacts=links,
         )
 
-    def create(self, request: Request, body: Submission) -> TaskResponse:
+    def mutation_result(
+        self, request: Request, row: WorkflowRecord, result: TaskView | AuditRequest
+    ) -> TaskResponse | TaskReceipt:
+        if Scope.TASK not in self.auth.settings.integration_scopes:
+            return TaskReceipt(
+                request_id=UUID(request.state.request_id),
+                task_id=UUID(row.task_id),
+                correlation_id=UUID(row.correlation_id),
+            )
+        if isinstance(result, AuditRequest):
+            return self.audit_view(request, row, result)
+        return self.workflow_view(request, row, result)
+
+    def create(self, request: Request, body: Submission) -> TaskResponse | TaskReceipt:
         task = body.task
-        if (
-            isinstance(task, (AuditRequest, BrownfieldRequest))
-            and task.network_id != self.network_id
-        ):
+        if isinstance(task, BrownfieldRequest) and task.network_id != self.network_id:
             raise WorkflowError(404, "network_scope_denied")
         request_id = UUID(request.state.request_id)
         if isinstance(task, AuditRequest):
             with self.runtime.lock(self.runtime.lock_path):
                 row = self.runtime.store.create(
-                    self.auth.owner, request_id, task, self.auth.workspace
+                    self.auth.owner,
+                    request_id,
+                    task,
+                    self.auth.workspace,
+                    network_available=task.network_id == self.network_id,
                 )
-            task_id = UUID(row.task_id)
-        else:
-            task_id = self.runtime.create(
-                self.auth.owner, request_id, task, self.auth.workspace
-            ).id
-        return self.project(request, task_id)
+            self.advance_audit(row, task, request_id)
+            return self.mutation_result(request, row, task)
+        result = self.runtime.create(
+            self.auth.owner, request_id, task, self.auth.workspace
+        )
+        return self.mutation_result(request, self.scoped(result.id), result)
 
     def advance_audit(
         self, row: WorkflowRecord, audit: AuditRequest, request_id: UUID
     ) -> None:
-        if self.runtime.store.status(row.task_id) != "queued":
+        if (
+            audit.network_id != self.network_id
+            or self.runtime.store.status(row.task_id) != "queued"
+        ):
             return
         task_id = UUID(row.task_id)
         path = self.runtime.lock_path.with_suffix(f".{task_id}.lock")
@@ -211,8 +210,6 @@ class IntegrationTasks:
             session.execute(update(Task).where(false()).values(status="queued"))
             projection = session.get_one(Task, row.task_id)
             if projection.status == "queued":
-                if audit.network_id != self.network_id:
-                    raise WorkflowError(404, "network_scope_denied")
                 self.audits.persist(
                     session, audit.network_id, row.owner, str(request_id), task_id
                 )
@@ -229,12 +226,19 @@ class IntegrationTasks:
 
     def artifact(self, artifact_id: UUID) -> ArtifactContent:
         with Session(self.auth.storage.engine) as session:
-            row = session.get(ArtifactRecord, str(artifact_id))
+            row = session.scalar(
+                select(ArtifactRecord)
+                .join(WorkflowRecord, WorkflowRecord.task_id == ArtifactRecord.task_id)
+                .where(
+                    ArtifactRecord.id == str(artifact_id),
+                    WorkflowRecord.owner == self.auth.owner,
+                    WorkflowRecord.workspace == self.auth.workspace,
+                )
+            )
         if row is None:
             raise WorkflowError(404, "artifact_not_found")
         task_id = UUID(row.task_id)
-        owner = self.scoped(task_id).owner
-        task = self.runtime.get(task_id, owner)
+        task = self.runtime.get(task_id, self.auth.owner)
         for item in task.artifacts:
             if item.name == row.name:
                 link = artifact_link(task_id, item)
@@ -290,7 +294,7 @@ def router_for(auth: IntegrationAuth, runtime: Runtime, audits: Audits) -> APIRo
     @router.post(
         "/tasks", status_code=201, dependencies=[Depends(auth.require(Scope.CREATE))]
     )
-    def create_task(request: Request, body: Submission) -> TaskResponse:
+    def create_task(request: Request, body: Submission) -> TaskResponse | TaskReceipt:
         auth.check_workspace(request, body.workspace_id)
         return tasks.create(request, body)
 
@@ -299,31 +303,40 @@ def router_for(auth: IntegrationAuth, runtime: Runtime, audits: Audits) -> APIRo
         request: Request, task_id: UUID, workspace_id: Workspace
     ) -> TaskResponse:
         auth.check_workspace(request, workspace_id)
-        return tasks.project(request, task_id)
+        row = tasks.scoped(task_id)
+        if row.payload_kind == "audit":
+            audit = AuditRequest.model_validate_json(row.payload)
+            tasks.advance_audit(row, audit, UUID(request.state.request_id))
+            return tasks.audit_view(request, row, audit)
+        return tasks.workflow_view(request, row, runtime.get(task_id, auth.owner))
 
     @router.post(
         "/tasks/{task_id}/input", dependencies=[Depends(auth.require(Scope.CREATE))]
     )
     def supply_input(
         request: Request, task_id: UUID, workspace_id: Workspace, body: Requirements
-    ) -> TaskResponse:
+    ) -> TaskResponse | TaskReceipt:
         auth.check_workspace(request, workspace_id)
-        if tasks.scoped(task_id).payload_kind != "greenfield":
+        row = tasks.scoped(task_id)
+        if row.payload_kind != "greenfield":
             raise WorkflowError(409, "task_not_awaiting_input")
-        runtime.input(task_id, auth.owner, UUID(request.state.request_id), body)
-        return tasks.project(request, task_id)
+        result = runtime.input(
+            task_id, auth.owner, UUID(request.state.request_id), body
+        )
+        return tasks.mutation_result(request, row, result)
 
     @router.post(
         "/tasks/{task_id}/cancel", dependencies=[Depends(auth.require(Scope.CANCEL))]
     )
     def cancel(
         request: Request, task_id: UUID, workspace_id: Workspace
-    ) -> TaskResponse:
+    ) -> TaskResponse | TaskReceipt:
         auth.check_workspace(request, workspace_id)
-        if tasks.scoped(task_id).payload_kind == "audit":
+        row = tasks.scoped(task_id)
+        if row.payload_kind == "audit":
             raise WorkflowError(409, "task_not_cancellable")
-        runtime.cancel(task_id, auth.owner, UUID(request.state.request_id))
-        return tasks.project(request, task_id)
+        result = runtime.cancel(task_id, auth.owner, UUID(request.state.request_id))
+        return tasks.mutation_result(request, row, result)
 
     @router.get(
         "/tasks/{task_id}/events", dependencies=[Depends(auth.require(Scope.EVENTS))]

@@ -29,10 +29,8 @@ class IntegrationAuth:
         self.lock = Lock()
         self.attempts: deque[float] = deque()
 
-    def verify(self, request: Request, supplied: Credential, scope: Scope) -> None:
-        settings = self.settings
-        request.state.integration_auth = True
-        if not settings.integration_enabled:
+    def admit(self) -> None:
+        if not self.settings.integration_enabled:
             raise WorkflowError(404, "integration_disabled")
         with self.lock:
             now = monotonic()
@@ -41,6 +39,10 @@ class IntegrationAuth:
             if len(self.attempts) >= 120:
                 raise WorkflowError(429, "integration_rate_limited")
             self.attempts.append(now)
+
+    def verify(self, request: Request, supplied: Credential, scope: Scope) -> None:
+        settings = self.settings
+        request.state.integration_auth = True
         loopback = False
         if request.client is not None:
             try:

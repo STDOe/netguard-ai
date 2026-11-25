@@ -23,7 +23,8 @@ from `backend` with local role credentials loaded.
 | POST `/approvals/{id}/decision` | With `approvals:read`, returns 403 `not_supported` |
 
 The API uses a dedicated Bearer token and returns 404 `integration_disabled`
-when disabled. Missing, expired and rotated credentials receive 401. A
+when disabled. The disabled check and the per-process request limit run before
+body intake, including for malformed JSON. Missing, expired and rotated credentials receive 401. A
 missing scope or a request for a different workspace receives 403. Unknown
 and foreign resource UUIDs receive 404. Read and control operations on
 individual resources take the `workspace_id` query parameter.
@@ -38,6 +39,17 @@ and correlation IDs. Matching caller, key, workspace and payload return the
 same Task ID. Reusing the key with a different payload or workspace returns
 409. Retry ambiguous transport errors or transient 503/409 `workflow_busy`
 with the original key and payload.
+
+Create, input and cancel return a `TaskReceipt` when the caller lacks
+`integration:tasks:read`. Its only fields are `schema_version`, `request_id`,
+`task_id` and `correlation_id`. This also applies to idempotent replays.
+With task read permission these operations return the usual `TaskResponse`.
+Artifact links and approval IDs additionally require their own read scopes.
+
+An interrupted audit remains queued with code `audit_profile_unavailable`
+while its original network profile is absent. The owner can poll the same ID
+or retry the original submission. When the profile returns, either operation
+can finish that audit once.
 
 A non-dry-run Brownfield task pauses for local Admin approval. The approval
 resource uses the task UUID as its stable ID and publishes the distinct plan
@@ -55,7 +67,11 @@ events and deduplicate by event ID. No reasoning traces are returned.
 
 Artifacts are allowlisted Greenfield exports. Each UUID refers to one task and
 export name. The payload is UTF-8 text in JSON with MIME type, SHA-256 over
-the UTF-8 bytes, size and provenance. Validate the hash before downstream use.
+the UTF-8 bytes, size and provenance. The UUID is UUIDv5 with the task UUID
+as namespace and the exact export name as input. Completion indexes exports
+regardless of caller scopes. A client with artifact read permission can fetch
+a known UUID directly after token rotation or restore. Unavailable and foreign
+artifacts both return 404 `artifact_not_found`. Validate the hash before downstream use.
 The checkpoint stores content, and SQLite stores the ownership index. The
 Brownfield service projection exposes plan metadata and execution evidence.
 The local Dashboard holds the full diff.

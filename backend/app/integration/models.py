@@ -84,11 +84,14 @@ class ApprovalView(PlanSummary):
     ]
 
 
-class TaskResponse(Model):
+class TaskReceipt(Model):
     schema_version: Literal["1.0"] = "1.0"
     request_id: UUID
     task_id: UUID
     correlation_id: UUID
+
+
+class TaskResponse(TaskReceipt):
     workspace_id: IntegrationName
     kind: Operation
     status: Status

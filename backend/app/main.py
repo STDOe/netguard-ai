@@ -309,8 +309,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(network_router(settings, driver))
     app.include_router(workflow_router(settings, workflows))
+    app.state.integration_auth = IntegrationAuth(settings, storage)
     app.state.integration_router = router_for(
-        IntegrationAuth(settings, storage), workflows, audits
+        app.state.integration_auth, workflows, audits
     )
     app.include_router(app.state.integration_router)
     return app

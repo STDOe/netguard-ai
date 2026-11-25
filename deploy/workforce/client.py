@@ -6,7 +6,7 @@ import ipaddress
 import json
 import os
 from time import monotonic, sleep
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from uuid import uuid4
@@ -64,15 +64,16 @@ def main() -> None:
                 status, payload = response.status, json.load(response)
         except HTTPError as error:
             status, payload = error.code, json.load(error)
+        except (URLError, TimeoutError):
+            raise SystemExit(f"Unable to reach NetGuard for {path}") from None
         if status != expected:
             raise SystemExit(f"Unexpected HTTP {status} for {path}")
         return payload
 
     if args.disabled:
-        assert (
-            call("/capabilities", expected=404)["error"]["code"]
-            == "integration_disabled"
-        )
+        response = call("/capabilities", expected=404)
+        if response["error"]["code"] != "integration_disabled":
+            raise SystemExit("Expected integration_disabled")
         print("Integration is disabled.")
         return
     capabilities = call("/capabilities")
@@ -86,7 +87,9 @@ def main() -> None:
             "task": {"kind": kind, "idempotency_key": str(uuid4()), **fields},
         }
         task = call("/tasks", body, expected=201)
-        assert call("/tasks", body, expected=201)["task_id"] == task["task_id"]
+        replay = call("/tasks", body, expected=201)
+        if replay["task_id"] != task["task_id"]:
+            raise SystemExit("Task ID changed on replay")
         return task
 
     design = submit(
@@ -118,7 +121,8 @@ def main() -> None:
         if monotonic() >= deadline:
             raise SystemExit("Task polling deadline exceeded")
         sleep(1)
-    assert design["status"] == "succeeded"
+    if design["status"] != "succeeded" or not design["artifacts"]:
+        raise SystemExit("Greenfield did not produce exports")
     print(f"Greenfield task {design['task_id']}")
     cursor = None
     while page := call(path + "/events", scoped=True, cursor=cursor):
@@ -128,7 +132,8 @@ def main() -> None:
         print(f"Received {len(page['events'])} events")
     for link in design["artifacts"]:
         payload = call(f"/artifacts/{link['artifact_id']}", scoped=True)
-        assert hashlib.sha256(payload["content"].encode()).hexdigest() == link["sha256"]
+        if hashlib.sha256(payload["content"].encode()).hexdigest() != link["sha256"]:
+            raise SystemExit("Artifact content hash mismatch")
         print(f"Verified {link['name']}")
 
     network = capabilities["network_id"]
@@ -138,7 +143,8 @@ def main() -> None:
         "destination": args.destination,
     }
     preview = submit("brownfield", network_id=network, goal=goal, dry_run=True)
-    assert preview["status"] == "succeeded" and preview["plan"]
+    if preview["status"] != "succeeded" or not preview["plan"]:
+        raise SystemExit("Brownfield dry-run did not produce a plan")
     pending = submit("brownfield", network_id=network, goal=goal, dry_run=False)
     approval_path = f"/approvals/{pending['approval_id']}"
     approval = call(approval_path, scoped=True)
@@ -148,17 +154,14 @@ def main() -> None:
         scoped=True,
         expected=403,
     )
-    assert refused["error"]["code"] == "not_supported"
-    assert (
-        call(f"/tasks/{pending['task_id']}/cancel", scoped=True, method="POST")[
-            "status"
-        ]
-        == "cancelled"
-    )
+    if refused["error"]["code"] != "not_supported":
+        raise SystemExit("Expected the service decision to be unsupported")
+    cancelled = call(f"/tasks/{pending['task_id']}/cancel", scoped=True, method="POST")
+    if cancelled["status"] != "cancelled":
+        raise SystemExit("Cancellation did not complete")
     audit = submit("audit", network_id=network)
-    assert (
-        audit["status"] == "succeeded" and audit["audit"]["evidence_status"] == "valid"
-    )
+    if audit["status"] != "succeeded" or audit["audit"]["evidence_status"] != "valid":
+        raise SystemExit("Audit did not produce valid evidence")
     print("Brownfield dry-run, approval denial, cancellation and audit verified.")
 
 

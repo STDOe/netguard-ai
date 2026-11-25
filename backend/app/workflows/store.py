@@ -21,6 +21,7 @@ from app.network.models import Model
 from app.storage import Base, Task
 from app.workflows.models import (
     Approval,
+    Artifact,
     AuditRequest,
     BrownfieldRequest,
     Event,
@@ -66,6 +67,13 @@ class WorkflowRecord(Base):
         return kind
 
 
+class ArtifactRecord(Base):
+    __tablename__ = "integration_artifacts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("workflow_metadata.task_id"))
+    name: Mapped[str] = mapped_column(String(32))
+
+
 class WorkflowEvent(Base):
     __tablename__ = "workflow_events"
 
@@ -99,6 +107,8 @@ class WorkflowStore:
         request_id: UUID,
         body: TaskRequest | AuditRequest,
         workspace: str | None = None,
+        *,
+        network_available: bool = True,
     ) -> WorkflowRecord:
         fingerprint = hash_model(body)
         with Session(self.engine, expire_on_commit=False) as session, session.begin():
@@ -116,6 +126,8 @@ class WorkflowStore:
                 ):
                     raise WorkflowError(409, "idempotency_conflict")
                 return existing
+            if not network_available:
+                raise WorkflowError(404, "network_scope_denied")
             task_id = uuid4()
             session.add(Task(id=str(task_id), kind=body.kind, status="queued"))
             session.flush()
@@ -306,11 +318,26 @@ class WorkflowStore:
         digest: str,
         result: str | None,
         recovery_code: str | None,
+        artifacts: tuple[Artifact, ...],
     ) -> None:
         with Session(self.engine) as session, session.begin():
             task = session.get_one(Task, task_id)
             task.status = status
             row = session.get_one(WorkflowRecord, task_id)
+            if row.workspace is not None and status == "succeeded" and artifacts:
+                session.execute(
+                    insert(ArtifactRecord).on_conflict_do_nothing(
+                        index_elements=[ArtifactRecord.id]
+                    ),
+                    [
+                        {
+                            "id": str(uuid5(UUID(task_id), item.name)),
+                            "task_id": task_id,
+                            "name": item.name,
+                        }
+                        for item in artifacts
+                    ],
+                )
             row.checkpoint_id = checkpoint_id
             row.checkpoint_digest = digest
             row.verified_result = result

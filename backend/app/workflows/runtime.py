@@ -266,6 +266,7 @@ class Runtime:
                 checkpoint_digest(before),
                 result.result.model_dump_json() if result.result else None,
                 result.code if result.status == "recovery_required" else None,
+                result.artifacts,
             )
         return result
 
