@@ -26,7 +26,15 @@ function Test-PrivateConfig {
     if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw '.env must be a regular file in the installation directory.'
     }
-    $security = Get-Acl -LiteralPath $envFile
+    try {
+        if ($PSVersionTable.PSEdition -eq 'Desktop') {
+            $security = $file.GetAccessControl([Security.AccessControl.AccessControlSections]'Owner,Access')
+        } else {
+            $security = Get-Acl -LiteralPath $envFile
+        }
+    } catch {
+        throw 'Could not inspect .env owner and access rules. Check local NTFS permissions.'
+    }
     if ($security.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $user.Value) {
         throw 'Set the .env owner to your Windows account and restrict its ACL.'
     }
@@ -79,6 +87,18 @@ function New-Token {
     } finally { $rng.Dispose() }
 }
 
+function New-ConfigAcl($security, $inheritance) {
+    $security.SetOwner($user)
+    $security.SetAccessRuleProtection($true, $false)
+    foreach ($principal in @($user, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+            $principal, 'FullControl', $inheritance, 'None', 'Allow'
+        )
+        $security.AddAccessRule($rule)
+    }
+    $security
+}
+
 # Windows PowerShell's Set-Acl fails when applying the constructed descriptor.
 # The .NET Framework APIs persist only the sections modified on that descriptor.
 function Set-ConfigAcl($item, $security) {
@@ -96,15 +116,7 @@ function New-Config {
         $stagingDirectory = [IO.Directory]::CreateDirectory($staging)
         $stage = 'protect staging directory ACL'
         # No secrets are written until the staging directory has a private ACL.
-        $acl = New-Object Security.AccessControl.DirectorySecurity
-        $acl.SetOwner($user)
-        $acl.SetAccessRuleProtection($true, $false)
-        foreach ($principal in @($user, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {
-            $rule = [Security.AccessControl.FileSystemAccessRule]::new(
-                $principal, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'
-            )
-            $acl.AddAccessRule($rule)
-        }
+        $acl = New-ConfigAcl ([Security.AccessControl.DirectorySecurity]::new()) 'ContainerInherit,ObjectInherit'
         $stage = 'apply staging directory ACL'
         Set-ConfigAcl $stagingDirectory $acl
         $stage = 'generate tokens'
@@ -125,11 +137,9 @@ function New-Config {
         $privateFile = Join-Path $staging 'config'
         $stage = 'write staged configuration'
         [IO.File]::WriteAllLines($privateFile, [string[]]$content, [Text.UTF8Encoding]::new($false))
-        # Protect the ACL explicitly so the file retains it when moved.
+        # Set an explicit, protected ACL so it stays private when moved.
         $stage = 'protect staged file ACL'
-        $fileAcl = Get-Acl -LiteralPath $privateFile
-        $fileAcl.SetOwner($user)
-        $fileAcl.SetAccessRuleProtection($true, $true)
+        $fileAcl = New-ConfigAcl ([Security.AccessControl.FileSecurity]::new()) 'None'
         $stage = 'apply staged file ACL'
         Set-ConfigAcl ([IO.FileInfo]::new($privateFile)) $fileAcl
         $stage = 'move staged configuration'

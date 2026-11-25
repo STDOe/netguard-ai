@@ -301,7 +301,13 @@ def test_windows_private_config_acl(installer: Installer) -> None:
             $ErrorActionPreference = 'Stop'
             $file = $env:INSTALLER_TEST_ENV_FILE
             $id = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-            $acl = Get-Acl -LiteralPath $file
+            if ($PSVersionTable.PSEdition -eq 'Desktop') {
+                $acl = [IO.FileInfo]::new($file).GetAccessControl(
+                    [Security.AccessControl.AccessControlSections]'Owner,Access'
+                )
+            } else {
+                $acl = Get-Acl -LiteralPath $file
+            }
             $sid = [Security.Principal.SecurityIdentifier]
             $allow = @($acl.GetAccessRules($true, $true, $sid) |
                 Where-Object { $_.AccessControlType -eq 'Allow' } |
