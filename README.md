@@ -5,6 +5,13 @@ NetGuard AI is a network design and security application with a standalone backe
 
 [Clean install](docs/quickstart-v0.1.md) · [Integration Contract v1](docs/integration-v1.md) · [Deployment security and recovery](docs/deployment-security.md) · [Release notes and acceptance](docs/release-v0.1.0.md)
 
+## Development team and next phases
+
+NetGuard AI is led and maintained by **STDOe**. The project has been built with AI development assistance from **OpenAI Codex** (implementation and tests) and **OpenAI ChatGPT** (architecture discussions, independent review and planning). These are acknowledgments of AI tools, **not GitHub collaborator accounts or claims of OpenAI endorsement**. See [Contributors and acknowledgments](docs/CONTRIBUTORS.md).
+
+**Next step: build a safe, isolated laboratory network before connecting NetGuard to real devices.** The [Development roadmap](docs/ROADMAP.md) outlines this prerequisite, proposed **v0.2 read-only discovery/audit**, **v0.3 controlled lab changes**, and a conditional **v1.0 production candidate**. No real-device compatibility or delivery dates are promised.
+
+
 ## Local development
 
 Native execution requires Linux or another POSIX system with local filesystem support for `fcntl.flock`. On Windows use Docker Desktop with Linux containers or WSL 2.
