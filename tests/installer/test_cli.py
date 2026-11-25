@@ -175,7 +175,7 @@ class Installer:
                 diagnostics.append(reason.read_text())
                 reason.unlink()
             acl_error = re.search(
-                r"Could not create a private \.env during ([a-z ]+) \(([A-Za-z]+)\)",
+                r"Could not create a private \.env during ([A-Za-z ]+) \(([A-Za-z]+)\)",
                 result.stderr,
             )
             if acl_error:
