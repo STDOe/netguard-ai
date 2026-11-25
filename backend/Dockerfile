@@ -20,6 +20,7 @@ COPY --chmod=u=rwX,go=rX app ./app
 COPY --chmod=u=rwX,go=rX config ./config
 COPY --chmod=u=rwX,go=rX migrations ./migrations
 
+LABEL org.opencontainers.image.version="0.1.1"
 USER 10001:10001
 EXPOSE 8000
 CMD ["sh", "-ec", "alembic upgrade head && exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000 --no-access-log --timeout-graceful-shutdown 10"]
