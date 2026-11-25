@@ -21,7 +21,7 @@ from app.network.errors import (
 )
 from app.network.models import NetworkSnapshot
 from app.network.repository import ExecutionGuard
-from app.security import ROLE_PERMISSIONS, Permission, Role
+from app.security import Permission, can_request_change, has_permissions
 from app.workflows.greenfield import (
     BillOfMaterials,
     Inventory,
@@ -239,9 +239,9 @@ class WorkflowNodes:
 
     def validate_intent(self, state: State) -> State:
         body = BrownfieldRequest.model_validate(state["request"])
-        if (
-            not body.dry_run
-            and Permission.CHANGE_NETWORK not in ROLE_PERMISSIONS[Role(state["actor"])]
+        if not body.dry_run and not can_request_change(
+            state["actor"],
+            self.store.get(UUID(state["task_id"]), state["actor"]).workspace,
         ):
             raise WorkflowError(403, "workflow_write_denied")
         snapshot = NetworkSnapshot.model_validate(state["snapshot"])
@@ -271,6 +271,7 @@ class WorkflowNodes:
     def request_approval(self, state: State) -> State:
         signal = self.interrupt_boundary("approval")
         resumed = self.resumed(signal)
+        resumed["actor"] = state["actor"]
         updated: State = {**state, **resumed}
         if signal.kind == "cancel":
             return {**resumed, "status": "cancelled"}
@@ -278,7 +279,11 @@ class WorkflowNodes:
             self.event(updated, "approval.expired", "approval_expired")
             return {**resumed, "status": "expired", "code": "approval_expired"}
         approval = self.store.approval(UUID(state["task_id"]))
-        if signal.kind != "decision" or approval is None:
+        if (
+            signal.kind != "decision"
+            or approval is None
+            or signal.actor != approval.actor
+        ):
             raise WorkflowError(409, "invalid_task_signal")
         if approval.decision == "reject":
             return {**resumed, "status": "rejected"}
@@ -290,7 +295,6 @@ class WorkflowNodes:
         if (
             approval is None
             or approval.decision != "approve"
-            or approval.actor != state["actor"]
             or plan.plan_id != approval.plan_id
             or plan.task_id != UUID(state["task_id"])
             or plan.exact_hash() != plan.plan_hash
@@ -310,8 +314,9 @@ class WorkflowNodes:
         if prior is not None:
             self.event(state, "execution.committed")
             return {"committed": prior.model_dump(mode="json")}
-        required = {Permission.APPROVE_WORKFLOW, Permission.CHANGE_NETWORK}
-        if not required.issubset(ROLE_PERMISSIONS[Role(approval.actor)]):
+        if not has_permissions(
+            approval.actor, Permission.APPROVE_WORKFLOW, Permission.CHANGE_NETWORK
+        ):
             raise WorkflowError(403, "workflow_write_denied")
         if monotonic() >= RUN_DEADLINE.get():
             raise WorkflowError(409, "workflow_time_limit")

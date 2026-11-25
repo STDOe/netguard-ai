@@ -38,7 +38,7 @@ def workflow_router(settings: Settings, runtime: Runtime) -> APIRouter:
 
     @router.get("/tasks/{task_id}", dependencies=[use])
     def task(task_id: UUID, request: Request) -> TaskView:
-        return runtime.get(task_id, request.state.actor)
+        return runtime.inspect(task_id, request.state.actor)
 
     @router.post("/tasks/{task_id}/input", dependencies=[use])
     def provide_input(task_id: UUID, body: Requirements, request: Request) -> TaskView:
@@ -91,6 +91,8 @@ def workflow_router(settings: Settings, runtime: Runtime) -> APIRouter:
 
     @router.get("/tasks/{task_id}/events", dependencies=[use])
     def events(task_id: UUID, request: Request) -> list[Event]:
-        return runtime.events(task_id, request.state.actor)
+        return runtime.events(
+            task_id, runtime.store.approval_owner(task_id, request.state.actor)
+        )
 
     return router

@@ -28,7 +28,7 @@ class Permission(StrEnum):
     APPROVE_WORKFLOW = "workflow:approve"
 
 
-ROLE_PERMISSIONS = {
+ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     Role.VIEWER: frozenset(
         {
             Permission.READ_CAPABILITIES,
@@ -50,6 +50,21 @@ ROLE_PERMISSIONS = {
         }
     ),
 }
+
+
+def has_permissions(actor: str, *permissions: Permission) -> bool:
+    return all(
+        permission in ROLE_PERMISSIONS.get(actor, frozenset())
+        for permission in permissions
+    )
+
+
+def can_request_change(owner: str, workspace: str | None) -> bool:
+    return has_permissions(owner, Permission.CHANGE_NETWORK) or (
+        workspace is not None and owner.startswith("service:")
+    )
+
+
 bearer = HTTPBearer(auto_error=False, scheme_name="LocalBearer")
 Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
 

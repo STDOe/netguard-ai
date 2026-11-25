@@ -54,6 +54,7 @@ export function workflows(page, shell) {
     const title = el('div', undefined, 'flex gap-2 items-center');
     title.append(el('h3', task.kind === 'greenfield' ? 'Greenfield design' : 'Brownfield change'), badge(task.status));
     detail.replaceChildren(title);
+    if (task.requested_by_service) detail.append(el('p', 'Requested by a Workforce integration', 'muted'));
     if (task.code) detail.append(el('p', task.code.replaceAll('_', ' '), 'muted'));
     if (task.missing.length) detail.append(el('p', `Required or inconsistent: ${task.missing.join(', ').replaceAll('_', ' ')}`));
     const base = `/api/v1/tasks/${task.id}`;
@@ -77,7 +78,7 @@ export function workflows(page, shell) {
     }
     if (task.approval) detail.append(disclosure('Recorded decision', JSON.stringify(task.approval, null, 2)));
     if (task.result) detail.append(disclosure('Execution evidence', JSON.stringify(task.result, null, 2)));
-    if (!task.approval && ['awaiting_input','awaiting_approval'].includes(task.status)) {
+    if (!task.requested_by_service && !task.approval && ['awaiting_input','awaiting_approval'].includes(task.status)) {
       const cancel = el('button', 'Cancel task');
       click(cancel, async () => {
         await show(await api(`${base}/cancel`, {method:'POST'}));

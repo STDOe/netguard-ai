@@ -348,48 +348,58 @@ class Audits:
         return saved.sha256, checks
 
     def run(self, network_id: UUID, actor: str, request_id: str) -> Report:
+        report_id = uuid4()
+        with Session(self.engine) as session, session.begin():
+            self.persist(session, network_id, actor, request_id, report_id)
+        return self.read(network_id, report_id)[0]
+
+    def persist(
+        self,
+        session: Session,
+        network_id: UUID,
+        actor: str,
+        request_id: str,
+        report_id: UUID,
+    ) -> None:
         revision = self.driver.repository.current_revision(network_id)
         snapshot_hash, checks = self.evaluate(network_id, revision)
         profile = self.driver.profile
         profile_hash = self.profile_hash(network_id)
-        report_id = uuid4()
         policy_version = checks[0].policy_version
-        with Session(self.engine) as session, session.begin():
-            session.add(
-                AuditRun(
-                    id=str(report_id),
-                    network_id=str(network_id),
-                    revision=revision,
-                    snapshot_hash=snapshot_hash,
-                    policy_version=policy_version,
-                    policy_hash=hash_model(profile.policy)
-                    if profile_hash and profile
-                    else None,
-                    profile_hash=profile_hash,
-                    findings_hash=findings_hash(checks),
-                    created_at=checks[0].timestamp.isoformat(),
-                    score=score(checks).model_dump_json(),
-                )
+        session.add(
+            AuditRun(
+                id=str(report_id),
+                network_id=str(network_id),
+                revision=revision,
+                snapshot_hash=snapshot_hash,
+                policy_version=policy_version,
+                policy_hash=hash_model(profile.policy)
+                if profile_hash and profile
+                else None,
+                profile_hash=profile_hash,
+                findings_hash=findings_hash(checks),
+                created_at=checks[0].timestamp.isoformat(),
+                score=score(checks).model_dump_json(),
             )
-            session.flush()
-            session.add_all(
-                AuditFinding(
-                    run_id=str(report_id), position=i, payload=item.model_dump_json()
-                )
-                for i, item in enumerate(checks)
+        )
+        session.flush()
+        session.add_all(
+            AuditFinding(
+                run_id=str(report_id), position=i, payload=item.model_dump_json()
             )
-            session.add(
-                audit_event(
-                    request_id,
-                    actor,
-                    201,
-                    event_type="security.audit",
-                    network_id=network_id,
-                    revision=revision,
-                    policy_version=policy_version,
-                )
+            for i, item in enumerate(checks)
+        )
+        session.add(
+            audit_event(
+                request_id,
+                actor,
+                201,
+                event_type="security.audit",
+                network_id=network_id,
+                revision=revision,
+                policy_version=policy_version,
             )
-        return self.read(network_id, report_id)[0]
+        )
 
     def read(self, network_id: UUID, report_id: UUID | None = None) -> list[Report]:
         snapshot = self.current_snapshot(network_id)

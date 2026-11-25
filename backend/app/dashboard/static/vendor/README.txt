@@ -1,6 +1,6 @@
 Locally served browser dependencies
 
-htmx.org 2.0.11 (BSD-2-Clause), dist/htmx.min.js
+htmx.org 2.0.11 (0BSD), dist/htmx.min.js
 cytoscape 3.33.1 (MIT), dist/cytoscape.min.js
 Tailwind CSS 3.4.19 (MIT), compiled utility stylesheet at ../tailwind.css
 

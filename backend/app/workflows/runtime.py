@@ -18,7 +18,7 @@ from langgraph.types import Command, StateSnapshot
 from langsmith import tracing_context
 
 from app.network.errors import CorruptSnapshot, NotFound
-from app.security import ROLE_PERMISSIONS, Permission, Role
+from app.security import Permission, can_request_change, has_permissions
 from app.workflows.graph import REQUEST, RUN_DEADLINE, State, WorkflowNodes, build_graph
 from app.workflows.models import (
     SCHEMA_VERSION,
@@ -150,6 +150,7 @@ class Runtime:
             correlation_id=UUID(row.correlation_id),
             kind=initial.kind,
             status="recovery_required",
+            requested_by_service=row.workspace is not None,
             code=row.recovery_code or "checkpoint_inconsistent",
             approval=approval,
             result=ExecutionResult.model_validate_json(row.verified_result)
@@ -242,6 +243,7 @@ class Runtime:
                 "correlation_id": row.correlation_id,
                 "kind": initial.kind,
                 "status": state["status"],
+                "requested_by_service": row.workspace is not None,
                 "code": state.get("code"),
                 "missing": state.get("missing", ()),
                 "plan": state.get("plan"),
@@ -264,6 +266,7 @@ class Runtime:
                 checkpoint_digest(before),
                 result.result.model_dump_json() if result.result else None,
                 result.code if result.status == "recovery_required" else None,
+                result.artifacts,
             )
         return result
 
@@ -330,7 +333,7 @@ class Runtime:
             not plan
             or approval.plan_hash != plan.plan_hash
             or approval.plan_id != plan.plan_id
-            or approval.actor != row.owner
+            or (row.workspace is None and approval.actor != row.owner)
         ):
             raise InvalidCheckpoint
         if not isinstance(initial, BrownfieldRequest) or initial.dry_run:
@@ -381,15 +384,21 @@ class Runtime:
         elif not row.pending:
             raise InvalidCheckpoint
 
-    def create(self, owner: str, request_id: UUID, body: TaskRequest) -> TaskView:
+    def create(
+        self,
+        owner: str,
+        request_id: UUID,
+        body: TaskRequest,
+        workspace: str | None = None,
+    ) -> TaskView:
         if (
             isinstance(body, BrownfieldRequest)
             and not body.dry_run
-            and (Permission.CHANGE_NETWORK not in ROLE_PERMISSIONS[Role(owner)])
+            and not can_request_change(owner, workspace)
         ):
             raise WorkflowError(403, "workflow_write_denied")
         with self.lock(self.lock_path):
-            row = self.store.create(owner, request_id, body)
+            row = self.store.create(owner, request_id, body, workspace)
         return self.get(UUID(row.task_id), owner)
 
     def get(self, task_id: UUID, owner: str) -> TaskView:
@@ -397,9 +406,13 @@ class Runtime:
             result = self.drive(graph, self.store.get(task_id, owner))
             return self.expire_if_due(graph, result, owner)
 
-    def pending_approvals(self, owner: str) -> list[TaskView]:
+    def inspect(self, task_id: UUID, actor: str) -> TaskView:
+        return self.get(task_id, self.store.approval_owner(task_id, actor))
+
+    def pending_approvals(self, actor: str) -> list[TaskView]:
         results = []
-        for task_id in self.store.pending_approvals(owner):
+        for task_id in self.store.pending_approvals(actor):
+            owner = self.store.approval_owner(task_id, actor)
             with self.graph(task_id, owner) as graph:
                 result = self.drive(graph, self.store.get(task_id, owner))
                 result = self.expire_if_due(graph, result, owner)
@@ -457,12 +470,15 @@ class Runtime:
         self,
         task_id: UUID,
         plan_id: UUID,
-        owner: str,
+        actor: str,
         request_id: UUID,
         decision: DecisionRequest,
     ) -> TaskView:
-        if Permission.APPROVE_WORKFLOW not in ROLE_PERMISSIONS[Role(owner)]:
+        if not has_permissions(
+            actor, Permission.APPROVE_WORKFLOW, Permission.CHANGE_NETWORK
+        ):
             raise WorkflowError(403, "approval_denied")
+        owner = self.store.approval_owner(task_id, actor)
         with self.graph(task_id, owner) as graph:
             result = self.drive(graph, self.store.get(task_id, owner))
             plan = result.plan
@@ -493,7 +509,7 @@ class Runtime:
                 self.expire_if_due(graph, result, owner)
                 raise WorkflowError(409, "approval_expired")
             approval, signal = self.create_approval(
-                plan, request_id, owner, decision, now
+                plan, request_id, actor, decision, now
             )
             self.store.signal(task_id, signal, approval)
             return self.drive(graph, self.store.get(task_id, owner))

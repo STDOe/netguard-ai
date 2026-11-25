@@ -140,8 +140,15 @@ async function retryAcceptedTask(page, name, edit) {
     await page.locator('#custom-goal').evaluate(field => { field.value = ''; });
     await page.locator('#route-device').selectOption({label:'Infra spoke'});
     await page.locator('#route-subnet').selectOption({label:'Cash / Payment · 10.20.0.0/16'});
+    await page.getByRole('button',{name:'Generate route plan'}).click();
+    await page.locator('#task-detail').getByText('succeeded',{exact:true}).waitFor();
+    const dryRunId = await page.locator('#task-id').inputValue();
+    const networkId = await page.locator('#network').inputValue();
+    const snapshot = await page.request.get(url + `/api/v1/networks/${networkId}/topology`);
+    assert.equal((await snapshot.json()).revision, 1);
     await page.locator('#dry-run').uncheck();
-    await retryAcceptedTask(page, 'Generate route plan');
+    const proposal = await retryAcceptedTask(page, 'Generate route plan');
+    assert.notEqual(proposal.id, dryRunId);
     await page.getByText('awaiting approval',{exact:true}).first().waitFor();
     await page.getByRole('link',{name:'Change Plans & Approvals'}).click();
     await page.getByRole('button',{name:'Review plan'}).click();
